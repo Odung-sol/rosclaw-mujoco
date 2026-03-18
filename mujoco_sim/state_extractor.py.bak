@@ -1,0 +1,33 @@
+import numpy as np
+import mujoco
+
+class SegwayStateExtractor:
+    def __init__(self, model):
+        self.L_jnt = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "L_wheel_joint")
+        self.R_jnt = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "R_wheel_joint")
+        self.Lq = model.jnt_qposadr[self.L_jnt]
+        self.Rq = model.jnt_qposadr[self.R_jnt]
+        self.Lv = model.jnt_dofadr[self.L_jnt]
+        self.Rv = model.jnt_dofadr[self.R_jnt]
+
+    def get_theta(self, data):
+        w, x, y, z = data.qpos[3:7]
+        return np.arcsin(np.clip(2.0*(w*y - z*x), -1.0, 1.0))
+
+    def get_theta_dot(self, data):
+        return data.qvel[4]
+
+    def get_phi(self, data):
+        return (data.qpos[self.Lq] + data.qpos[self.Rq]) / 2.0
+
+    def get_phi_dot(self, data):
+        return (data.qvel[self.Lv] + data.qvel[self.Rv]) / 2.0
+
+    def get_state(self, data):
+        return np.array([self.get_theta(data), self.get_theta_dot(data),
+                         self.get_phi(data), self.get_phi_dot(data)])
+
+    def print_state(self, data):
+        s = self.get_state(data)
+        print(f"  t={data.time:6.3f}  theta={np.degrees(s[0]):+7.2f}deg  "
+              f"theta_dot={s[1]:+7.3f}  phi={s[2]:+7.3f}  phi_dot={s[3]:+7.3f}")

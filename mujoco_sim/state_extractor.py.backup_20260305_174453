@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+import numpy as np
+
+class SegwayStateExtractor:
+    """
+    Extract state for LQR:
+    x = [theta, theta_dot, phi, phi_dot]
+
+    theta     = body roll angle (rad)  (quat -> roll)
+    theta_dot = body roll rate (rad/s) (approx qvel index used)
+    phi       = average wheel angle (rad)
+    phi_dot   = average wheel velocity (rad/s)
+    """
+
+    def __init__(self, model):
+        self.model = model
+
+        # Joint indices (by name)
+        self.Lq = model.joint("L_wheel_joint").qposadr[0]
+        self.Rq = model.joint("R_wheel_joint").qposadr[0]
+        self.Lv = model.joint("L_wheel_joint").dofadr[0]
+        self.Rv = model.joint("R_wheel_joint").dofadr[0]
+
+    def reset(self):
+        # placeholder for compatibility (네 코드에서 ext.reset() 호출하길래)
+        pass
+
+    def get_theta(self, data):
+        """
+        Body roll angle from quaternion.
+        MuJoCo quaternion order: [w, x, y, z]
+        """
+        w, x, y, z = data.qpos[3:7]
+        sinr_cosp = 2.0 * (w * x + y * z)
+        cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+        return np.arctan2(sinr_cosp, cosr_cosp)
+
+    def get_theta_dot(self, data):
+        """
+        Body roll rate (rough). This depends on your model DOF layout.
+        If it misbehaves, we will remap.
+        """
+        return float(data.qvel[3])
+
+    def get_phi(self, data):
+        return float((data.qpos[self.Lq] + data.qpos[self.Rq]) / 2.0)
+
+    def get_phi_dot(self, data):
+        return float((data.qvel[self.Lv] + data.qvel[self.Rv]) / 2.0)
+
+    def get_state(self, data):
+        return np.array([
+            self.get_theta(data),
+            self.get_theta_dot(data),
+            self.get_phi(data),
+            self.get_phi_dot(data),
+        ], dtype=float)
+
+    def print_state(self, data):
+        s = self.get_state(data)
+        print(
+            f"t={data.time:7.3f}  "
+            f"theta={np.degrees(s[0]):+7.2f}deg  "
+            f"theta_dot={s[1]:+8.3f}  "
+            f"phi={s[2]:+10.3f}  "
+            f"phi_dot={s[3]:+10.3f}"
+        )

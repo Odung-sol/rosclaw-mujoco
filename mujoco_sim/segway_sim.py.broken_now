@@ -1,0 +1,208 @@
+import time
+import json
+import socket
+from collections import deque
+
+import numpy as np
+import matplotlib.pyplot as plt
+import mujoco
+import mujoco.viewer
+
+from state_extractor import SegwayStateExtractor
+from lqr_controller import SegwayLQR
+
+
+MODEL_PATH = "segway.xml"
+
+SIM_DT = 0.01
+TORQUE_LIMIT = 2.0
+
+UDP_STATE_PORT = 9999
+
+
+class SegwaySimulation:
+
+    def __init__(self):
+
+        self.model = mujoco.MjModel.from_xml_path(MODEL_PATH)
+        self.data = mujoco.MjData(self.model)
+
+        self.ext = SegwayStateExtractor(self.model)
+        self.lqr = SegwayLQR(torque_limit=TORQUE_LIMIT)
+
+        self.L_act = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, "L_wheel_torque"
+        )
+
+        self.R_act = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, "R_wheel_torque"
+        )
+
+        self.state_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        self.failed = False
+        self.log_data = []
+
+        # -----------------
+        # Graph buffers
+        # -----------------
+
+        self.t_buf = deque(maxlen=500)
+        self.theta_buf = deque(maxlen=500)
+        self.phi_buf = deque(maxlen=500)
+        self.torque_buf = deque(maxlen=500)
+
+        plt.ion()
+
+        self.fig, self.ax = plt.subplots(3, 1, sharex=True)
+
+        self.ax[0].set_ylabel("theta")
+        self.ax[1].set_ylabel("phi")
+        self.ax[2].set_ylabel("torque")
+
+    def reset(self, pitch_deg=2.0):
+
+        mujoco.mj_resetData(self.model, self.data)
+
+        pitch = np.deg2rad(pitch_deg)
+
+        self.data.qpos[3] = np.cos(pitch / 2)
+        self.data.qpos[5] = np.sin(pitch / 2)
+
+        self.failed = False
+        self.log_data = []
+
+        self.t_buf.clear()
+        self.theta_buf.clear()
+        self.phi_buf.clear()
+        self.torque_buf.clear()
+
+        mujoco.mj_forward(self.model, self.data)
+
+    def step(self):
+
+        state = self.ext.get_state(self.data)
+
+        if abs(state[0]) > np.deg2rad(30):
+
+            self.failed = True
+
+            self.data.ctrl[self.L_act] = 0
+            self.data.ctrl[self.R_act] = 0
+
+            mujoco.mj_step(self.model, self.data)
+
+            return state, 0, 0
+
+        tL, tR = self.lqr.compute_torque(state)
+
+        self.data.ctrl[self.L_act] = tL
+        self.data.ctrl[self.R_act] = tR
+
+        mujoco.mj_step(self.model, self.data)
+
+        return state, tL, tR
+
+    def send_state_udp(self, state, tL, tR):
+
+        msg = json.dumps({
+            "time": round(self.data.time, 4),
+            "theta": round(float(state[0]), 6),
+            "theta_dot": round(float(state[1]), 6),
+            "phi": round(float(state[2]), 6),
+            "phi_dot": round(float(state[3]), 6),
+            "tau_L": round(float(tL), 4),
+            "tau_R": round(float(tR), 4)
+        }).encode()
+
+        try:
+            self.state_sock.sendto(msg, ("127.0.0.1", UDP_STATE_PORT))
+        except:
+            pass
+
+    def update_plot(self, t, theta, phi, torque):
+
+        self.t_buf.append(t)
+        self.theta_buf.append(theta)
+        self.phi_buf.append(phi)
+        self.torque_buf.append(torque)
+
+        if len(self.t_buf) < 10:
+            return
+
+        self.ax[0].cla()
+        self.ax[0].plot(self.t_buf, self.theta_buf)
+        self.ax[0].set_ylabel("theta")
+
+        self.ax[1].cla()
+        self.ax[1].plot(self.t_buf, self.phi_buf)
+        self.ax[1].set_ylabel("phi")
+
+        self.ax[2].cla()
+        self.ax[2].plot(self.t_buf, self.torque_buf)
+        self.ax[2].set_ylabel("torque")
+
+        plt.pause(0.001)
+
+    def run_viewer(self, pitch_deg=2.0):
+
+        self.reset(pitch_deg)
+
+        count = 0
+
+        with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
+
+            while viewer.is_running():
+
+                t0 = time.time()
+
+                state, tL, tR = self.step()
+
+                t = self.data.time
+                theta = state[0]
+                phi = state[2]
+                torque = tL
+
+                self.update_plot(t, theta, phi, torque)
+
+                count += 1
+
+                if count % 5 == 0:
+                    self.send_state_udp(state, tL, tR)
+
+                if count % 500 == 0:
+                    self.ext.print_state(self.data)
+
+                viewer.sync()
+
+                dt = SIM_DT - (time.time() - t0)
+
+                if dt > 0:
+                    time.sleep(dt)
+
+    def run_headless(self, duration=10.0, pitch_deg=2.0):
+
+        self.reset(pitch_deg)
+
+        steps = int(duration / SIM_DT)
+
+        for i in range(steps):
+
+            state, tL, tR = self.step()
+
+            self.log_data.append({
+                "time": self.data.time,
+                "theta": state[0],
+                "theta_dot": state[1],
+                "phi": state[2],
+                "phi_dot": state[3],
+                "tau_L": tL,
+                "tau_R": tR
+            })
+
+
+if __name__ == "__main__":
+
+    sim = SegwaySimulation()
+
+    sim.run_viewer()

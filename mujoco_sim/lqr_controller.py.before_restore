@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+import numpy as np
+
+class SegwayLQR:
+    """
+    Fixed LQR gain (MATLAB).
+    state = [theta, theta_dot, phi, phi_dot]
+    Tw = -K x
+    tau_L = Tw/2, tau_R = Tw/2
+    """
+
+    def __init__(self, torque_limit=20.0):
+        self.torque_limit = float(torque_limit)
+
+        # MATLAB 기반 K값 (이 MuJoCo 모델 파라미터로 계산됨 → 더 tight한 제어)
+        # state = [theta_pitch(rad), theta_dot(rad/s), phi_world(rad), phi_dot_world(rad/s)]
+        self.K = np.array([[-144.8373, -44.0214, -3.1623, -6.0483]], dtype=float)
+
+        print("[LQR] K =", self.K)
+
+    def compute_torque(self, state):
+        state = np.asarray(state, dtype=float).reshape(-1)
+        if state.size != 4:
+            raise ValueError("state must be length 4")
+
+        # MuJoCo: positive ctrl → 바퀴 후진
+        # theta>0(앞으로 기울) → Tw<0 필요(바퀴 전진) → K가 음수라 K@state < 0 ✓
+        Tw = (self.K @ state).item()            # 부호 없음
+        tau_each = Tw / 2.0
+        tau_each = float(np.clip(tau_each, -self.torque_limit, self.torque_limit))
+        return tau_each, tau_each

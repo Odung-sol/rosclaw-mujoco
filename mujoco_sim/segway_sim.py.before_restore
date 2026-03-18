@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+import time
+import json
+import socket
+import argparse
+import numpy as np
+import mujoco
+import mujoco.viewer
+
+from state_extractor import SegwayStateExtractor
+from lqr_controller import SegwayLQR
+
+MODEL_PATH = "segway.xml"
+
+SIM_DT       = 0.002
+TORQUE_LIMIT = 20.0
+UDP_STATE_PORT = 9091
+
+# ── 외력 설정 ──────────────────────────────────────────────
+PUSH_FORCE    = 50.0    # N  (막대 끝에 가하는 힘의 크기)
+PUSH_DURATION = 0.3     # 초 (키 누를 때마다 이 시간만큼 힘 인가)
+POLE_H        = 0.20    # m  (CoM 위 막대 끝까지 거리 → 토크 팔)
+
+# GLFW 키 코드 (glfw 미import 방지)
+GLFW_PRESS     = 1
+GLFW_KEY_RIGHT = 262   # → : 앞으로 밀기
+GLFW_KEY_LEFT  = 263   # ← : 뒤로 밀기
+
+class SegwaySimulation:
+    def __init__(self):
+        self.model = mujoco.MjModel.from_xml_path(MODEL_PATH)
+        self.data  = mujoco.MjData(self.model)
+
+        self.ext = SegwayStateExtractor(self.model)
+        self.lqr = SegwayLQR(torque_limit=TORQUE_LIMIT)
+
+        self.L_act = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, "L_wheel_torque")
+        self.R_act = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, "R_wheel_torque")
+
+        self.state_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        self.failed = False
+        self.log_data = []
+
+        # 외력 상태
+        self._body_id    = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "body")
+        self._push_timer = 0.0   # 남은 힘 인가 시간
+        self._push_dir   = 0.0   # +1(앞) / -1(뒤)
+
+    def reset(self, pitch_deg=0.0):
+        mujoco.mj_resetData(self.model, self.data)
+
+        # 바퀴가 바닥에 닿도록 높이 보정 (XML body z=0.2, 바퀴반지름=0.1)
+        self.data.qpos[2] = 0.1
+
+        # pitch 초기 자세 (기본 0° = 수직으로 세운 상태)
+        pitch = np.deg2rad(pitch_deg)
+        self.data.qpos[3] = np.cos(pitch/2)   # w
+        self.data.qpos[5] = np.sin(pitch/2)   # y (Y축 회전 = pitch)
+
+        self.failed = False
+        self.log_data = []
+        self.ext.reset()
+        mujoco.mj_forward(self.model, self.data)
+
+    def _apply_push(self):
+        """막대 끝에 외력 인가 (xfrc_applied = world-frame [fx,fy,fz, tx,ty,tz])"""
+        if self._push_timer > 0:
+            F = self._push_dir * PUSH_FORCE
+            self.data.xfrc_applied[self._body_id, 0] = F          # x방향 힘
+            self.data.xfrc_applied[self._body_id, 4] = F * POLE_H # y토크 (막대 끝 위치 반영)
+            self._push_timer -= SIM_DT
+        else:
+            self.data.xfrc_applied[self._body_id, :] = 0.0
+
+    def step(self):
+        state = self.ext.get_state(self.data)
+
+        # 막대 끝 외력 인가
+        self._apply_push()
+
+        # 넘어짐 판정 (pitch 45도 이상)
+        if abs(state[0]) > np.deg2rad(45):
+            self.failed = True
+            self.data.ctrl[self.L_act] = 0.0
+            self.data.ctrl[self.R_act] = 0.0
+            self.data.xfrc_applied[self._body_id, :] = 0.0
+            mujoco.mj_step(self.model, self.data)
+            return state, 0.0, 0.0
+
+        tL, tR = self.lqr.compute_torque(state)
+        self.data.ctrl[self.L_act] = float(tL)
+        self.data.ctrl[self.R_act] = float(tR)
+
+        mujoco.mj_step(self.model, self.data)
+        return state, tL, tR
+
+    def send_state_udp(self, state, tL, tR):
+        # phi는 LQR용(≈0)과 표시용(실제 바퀴 각도)을 분리
+        theta_disp   = self.ext.get_theta_display(self.data)   # 실제 pitch 각도
+        phi_disp     = self.ext.get_phi_display(self.data)
+        phi_dot_disp = self.ext.get_phi_dot_display(self.data)
+
+        msg = json.dumps({
+            "time":      float(self.data.time),
+            "theta":     theta_disp,      # 그래프 표시용 (실제 pitch 기울기)
+            "theta_dot": float(state[1]),
+            "phi":       phi_disp,        # 그래프 표시용 (실제 바퀴 각도)
+            "phi_dot":   phi_dot_disp,
+            "tau_L":     float(tL),
+            "tau_R":     float(tR),
+        }).encode()
+
+        try:
+            self.state_sock.sendto(msg, ("127.0.0.1", UDP_STATE_PORT))
+        except Exception:
+            pass
+
+    def _start_input_thread(self):
+        """터미널 입력으로 외력 제어 (macOS GLFW 충돌 방지)"""
+        import threading
+        def _loop():
+            print("\n[PUSH 조작법] f=앞으로 밀기 / b=뒤로 밀기 / Enter 입력\n")
+            while True:
+                try:
+                    cmd = input().strip().lower()
+                except EOFError:
+                    break
+                if cmd == 'f':
+                    self._push_timer = PUSH_DURATION
+                    self._push_dir   = +1.0
+                    print("[PUSH] 앞으로 →")
+                elif cmd == 'b':
+                    self._push_timer = PUSH_DURATION
+                    self._push_dir   = -1.0
+                    print("[PUSH] 뒤로 ←")
+        threading.Thread(target=_loop, daemon=True).start()
+
+    def run_viewer(self, pitch_deg=2.0):
+        self.reset(pitch_deg)
+        count = 0
+        self._start_input_thread()
+
+        with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
+            while viewer.is_running():
+                t0 = time.time()
+
+                state, tL, tR = self.step()
+                count += 1
+
+                # UDP: 너무 자주 보내면 부담될 수 있어서 5 유지
+                if count % 5 == 0:
+                    self.send_state_udp(state, tL, tR)
+
+                if count % 500 == 0:
+                    self.ext.print_state(self.data)
+
+                viewer.sync()
+
+                dt = SIM_DT - (time.time() - t0)
+                if dt > 0:
+                    time.sleep(dt)
+
+    def run_headless(self, duration=10.0, pitch_deg=2.0):
+        self.reset(pitch_deg)
+        steps = int(duration / SIM_DT)
+
+        for i in range(steps):
+            state, tL, tR = self.step()
+            self.log_data.append({
+                "time": float(self.data.time),
+                "theta": float(state[0]),
+                "theta_dot": float(state[1]),
+                "phi": float(state[2]),
+                "phi_dot": float(state[3]),
+                "tau_L": float(tL),
+                "tau_R": float(tR),
+            })
+
+            if i % 5 == 0:
+                self.send_state_udp(state, tL, tR)
+
+            if i % 500 == 0:
+                self.ext.print_state(self.data)
+
+            if self.failed:
+                print(f"FAILED at t={self.data.time:.3f}")
+                break
+
+        thetas = [abs(d["theta"]) for d in self.log_data] or [0.0]
+        taus   = [abs(d["tau_L"]) for d in self.log_data] or [0.0]
+        print(f"\n[Result] steps={len(self.log_data)}, "
+              f"theta_max={np.degrees(max(thetas)):.2f}deg, "
+              f"tau_RMS={np.sqrt(np.mean(np.array(taus)**2)):.3f}Nm, "
+              f"failed={self.failed}")
+
+    def close(self):
+        try:
+            self.state_sock.close()
+        except Exception:
+            pass
+
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    p.add_argument("--headless", action="store_true")
+    p.add_argument("--duration", type=float, default=10.0)
+    p.add_argument("--pitch", type=float, default=2.0)
+    args = p.parse_args()
+
+    sim = SegwaySimulation()
+    try:
+        if args.headless:
+            sim.run_headless(args.duration, args.pitch)
+        else:
+            sim.run_viewer(args.pitch)
+    except KeyboardInterrupt:
+        print("\nStopped")
+    finally:
+        sim.close()
