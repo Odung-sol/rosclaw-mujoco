@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+
+# Backups (정리 완료)
+*.bak
+*.bak_*
+*.broken
+*.broken_*
+*.before_restore
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker/data/
+
+# MuJoCo compiled
+*.mjb

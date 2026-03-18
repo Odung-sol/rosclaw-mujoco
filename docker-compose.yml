@@ -1,19 +1,72 @@
+# rosclaw-mujoco Docker Compose
+# 기존 rosbridge 설정 유지 + LQR 노드 + ROSClaw discovery 추가
+
+version: "3.8"
+
 services:
+  # ── ROS2 + rosbridge WebSocket (기존) ──
   ros2_bridge:
-    image: ros:humble-ros-base
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.ros2
     platform: linux/arm64
     container_name: segway_ros2
     environment:
       - ROS_DOMAIN_ID=0
     ports:
-      - "9090:9090"          # rosbridge websocket
-      - "9091:9091/udp"      # state: macOS -> docker (optional)
-      - "9092:9092/udp"      # torque: docker -> macOS (optional)
+      - "9090:9090"
+    volumes:
+      - ./ros2_ws:/root/ros2_ws:ro
     command: >
       bash -lc "
-        set -e;
-        apt-get update;
-        apt-get install -y --no-install-recommends ros-humble-rosbridge-suite;
         source /opt/ros/humble/setup.bash;
-        ros2 launch rosbridge_server rosbridge_websocket_launch.xml;
+        ros2 launch rosbridge_server rosbridge_websocket_launch.xml
+          port:=9090
+          unregister_timeout:=60.0;
+      "
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/9090"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── LQR Controller ROS2 Node (NEW) ──
+  lqr_controller:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.ros2
+    platform: linux/arm64
+    container_name: segway_lqr
+    depends_on:
+      ros2_bridge:
+        condition: service_healthy
+    environment:
+      - ROS_DOMAIN_ID=0
+    volumes:
+      - ./ros2_ws:/root/ros2_ws:ro
+    command: >
+      bash -lc "
+        source /opt/ros/humble/setup.bash;
+        python3 /root/ros2_ws/src/segway_controller/lqr_controller_node.py
+          --ros-args --params-file /root/ros2_ws/src/segway_controller/params.yaml;
+      "
+
+  # ── ROSClaw Discovery Node (NEW — for OpenClaw) ──
+  rosclaw_discovery:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.ros2
+    platform: linux/arm64
+    container_name: segway_discovery
+    depends_on:
+      ros2_bridge:
+        condition: service_healthy
+    environment:
+      - ROS_DOMAIN_ID=0
+    volumes:
+      - ./ros2_ws:/root/ros2_ws:ro
+    command: >
+      bash -lc "
+        source /opt/ros/humble/setup.bash;
+        python3 /root/ros2_ws/src/segway_controller/discovery_node.py;
       "

@@ -1,0 +1,15 @@
+segway_lqr_controller:
+  ros__parameters:
+    # ── Segway Physical Parameters ──
+    # 이 값들을 mujoco_sim/segway.xml 모델과 일치시키세요
+    body_mass: 10.0        # kg
+    wheel_mass: 1.0        # kg
+    body_length: 0.5       # m (CoM height)
+    wheel_radius: 0.1      # m
+    body_inertia: 0.5      # kg·m²
+    max_torque: 20.0       # N·m
+
+    # ── LQR Weights ──
+    # state = [theta, theta_dot, x, x_dot]
+    Q_diag: [100.0, 10.0, 1.0, 5.0]
+    R_val: 1.0
