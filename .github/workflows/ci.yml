@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Job 1: Lint + Unit Tests ──
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install websocket-client numpy scipy
+
+      - name: Lint with ruff
+        run: ruff check ros2_ws/ tests/ --output-format=github
+
+      - name: Run unit tests
+        env:
+          GOOGLE_API_KEY: "fake-key-for-ci"
+        run: pytest tests/ -v --tb=short
+
+  # ── Job 2: Docker Build Verification ──
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up QEMU (for arm64 cross-build)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build Docker image
+        run: |
+          docker buildx build \
+            --platform linux/arm64 \
+            --file docker/Dockerfile.ros2 \
+            --tag rosclaw-mujoco:ci-test \
+            docker/
