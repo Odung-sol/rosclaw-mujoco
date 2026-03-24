@@ -118,7 +118,7 @@ class SegwayLQRController(Node):
             s["x_dot"] - self.v_ref,
         ])
 
-        torque = float(-self.K @ x_vec)
+        torque = float((-self.K @ x_vec).item())
         torque = np.clip(torque, -self.max_torque, self.max_torque)
         self._publish_torque(torque, s.get("timestamp", 0))
 
