@@ -21,7 +21,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -r requirements-dev.txt
+          pip install websocket-client numpy scipy
 
       - name: Lint with ruff
         run: ruff check ros2_ws/ tests/ --output-format=github
@@ -51,5 +52,4 @@ jobs:
             --platform linux/arm64 \
             --file docker/Dockerfile.ros2 \
             --tag rosclaw-mujoco:ci-test \
-            --load \
             docker/
