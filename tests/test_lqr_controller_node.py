@@ -139,16 +139,37 @@ class TestOnReference:
         controller._on_reference(msg)
         assert controller.enabled is False
 
-    def test_update_gains(self, controller):
-        K_before = controller.K.copy()
+    def test_update_gains_success(self, controller):
+        """CARE solver 성공 시 Q, R, K가 업데이트되는지 검증."""
+        K_new = np.array([[1.0, 2.0, 3.0, 4.0]])
+        controller._compute_lqr_gain = MagicMock(return_value=K_new)
+
         msg = _make_ref_msg({
             "command": "update_gains",
-            "Q_diag": [100, 10, 1, 5],
-            "R_val": 2.0,
+            "Q_diag": [200, 20, 2, 10],
+            "R_val": 0.8,
         })
         controller._on_reference(msg)
-        assert not np.allclose(K_before, controller.K)
-        assert controller.R_lqr[0, 0] == 2.0
+        assert controller.Q[0, 0] == 200.0
+        assert controller.R_lqr[0, 0] == 0.8
+        assert np.allclose(controller.K, K_new)
+
+    def test_update_gains_revert_on_failure(self, controller):
+        """CARE solver 실패 시 Q, R이 원래 값으로 복원되는지 검증."""
+        Q_before = controller.Q.copy()
+        R_before = controller.R_lqr.copy()
+        controller._compute_lqr_gain = MagicMock(
+            side_effect=np.linalg.LinAlgError("solver failed")
+        )
+
+        msg = _make_ref_msg({
+            "command": "update_gains",
+            "Q_diag": [999, 999, 999, 999],
+            "R_val": 0.001,
+        })
+        controller._on_reference(msg)
+        assert np.allclose(controller.Q, Q_before)
+        assert np.allclose(controller.R_lqr, R_before)
 
     def test_reset(self, controller):
         controller.x_ref = 5.0

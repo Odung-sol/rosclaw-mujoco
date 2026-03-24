@@ -151,12 +151,19 @@ class SegwayLQRController(Node):
         elif cmd == "update_gains":
             Q_new = ref.get("Q_diag")
             R_new = ref.get("R_val")
+            Q_backup, R_backup = self.Q.copy(), self.R_lqr.copy()
             if Q_new:
                 self.Q = np.diag(Q_new)
             if R_new:
                 self.R_lqr = np.array([[R_new]])
-            self.K = self._compute_lqr_gain()
-            self.get_logger().info(f"→ gains updated K={np.round(self.K, 4).tolist()}")
+            try:
+                self.K = self._compute_lqr_gain()
+                self.get_logger().info(
+                    f"→ gains updated K={np.round(self.K, 4).tolist()}"
+                )
+            except Exception as e:
+                self.Q, self.R_lqr = Q_backup, R_backup
+                self.get_logger().error(f"→ gain update failed, reverted: {e}")
 
         elif cmd == "reset":
             self.x_ref = 0.0
