@@ -1,53 +1,68 @@
 # rosclaw-mujoco
 
-> ROS2 Segway Balancing Simulator + OpenClaw AI Natural Language Control
+> ROS2 Segway Balancing Simulator + LLM-based Natural Language Control
+
+[![CI](https://github.com/Odung-sol/rosclaw-mujoco/actions/workflows/ci.yml/badge.svg)](https://github.com/Odung-sol/rosclaw-mujoco/actions/workflows/ci.yml)
 
 MuJoCo 시뮬레이터의 Segway(Inverted Pendulum)를 LQR 컨트롤러로 밸런싱하고,
-[ROSClaw](https://github.com/PlaiPin/rosclaw)를 통해 OpenClaw AI 에이전트가
-자연어로 제어할 수 있는 시스템입니다.
+**Gemini API 기반 자연어 처리 노드**와 [ROSClaw](https://github.com/PlaiPin/rosclaw)를 통해
+자연어 명령으로 로봇을 제어할 수 있는 시스템입니다.
 
 ## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  User (WhatsApp / Telegram / Discord / Slack)                │
-│       "segway를 앞으로 1m 이동시켜"                            │
-└──────────────────────┬───────────────────────────────────────┘
-                       ▼
-┌──────────────────────────────────────┐
-│  OpenClaw AI Agent                   │
-│  └─ ROSClaw Plugin (extensions/)     │
-│     └─ rosbridge-client (packages/)  │
-└──────────────────────┬───────────────┘
-                       │ WebSocket (ws://localhost:9090)
-┌──────────────────────┼──────────────────────────────────────┐
-│  Docker Container    ▼                                      │
-│  ┌────────────────────────────┐                             │
-│  │  rosbridge_websocket :9090 │                             │
-│  └────────┬───────────────────┘                             │
-│           │ DDS                                             │
-│  ┌────────▼──────────────────┐  ┌─────────────────────────┐ │
-│  │  LQR Controller Node     │  │  ROSClaw Discovery Node │ │
-│  │  - balancing              │  │  - capability report    │ │
-│  │  - reference tracking     │  │  - auto-discovery       │ │
-│  └────────┬──────────────────┘  └─────────────────────────┘ │
-└───────────┼─────────────────────────────────────────────────┘
-            │ WebSocket (/segway/cmd_torque)
-┌───────────▼─────────────────────────────────────────────────┐
-│  macOS Native                                               │
-│  ┌─────────────────┐    ┌──────────────────────┐            │
-│  │ segway_bridge.py │◄──►│  MuJoCo Simulator   │            │
-│  │ (WS client)      │    │  segway_sim.py      │            │
-│  └─────────────────┘    │  + STL meshes        │            │
-│                          └──────────────────────┘            │
+│  User                                                        │
+│  "앞으로 1.5미터 부드럽게 이동해" / "진동 줄여줘"                  │
+└──────────────┬──────────────────────┬────────────────────────┘
+               │ CLI (nlp_cli_node)   │ OpenClaw (extensions/)
+               ▼                      ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Docker Container (ROS2 Humble / linux/arm64)                │
+│                                                              │
+│  ┌─────────────────────────┐   ┌───────────────────────────┐ │
+│  │  Gemini NLP Node        │   │  rosbridge_websocket :9090│ │
+│  │  /segway/nlp_input ──►  │   └────────┬──────────────────┘ │
+│  │  Gemini API ──► JSON    │            │ DDS                │
+│  │  ──► /segway/cmd_reference           │                    │
+│  └──────────┬──────────────┘            │                    │
+│             │                           │                    │
+│  ┌──────────▼──────────────┐  ┌────────▼──────────────────┐ │
+│  │  LQR Controller Node   │  │  ROSClaw Discovery Node   │ │
+│  │  - LQR gain scheduling │  │  - capability report      │ │
+│  │  - on-the-fly tuning   │  │  - auto-discovery         │ │
+│  │  - CARE solver + rollback  └───────────────────────────┘ │
+│  └──────────┬──────────────┘                                 │
+└─────────────┼────────────────────────────────────────────────┘
+              │ WebSocket (/segway/cmd_torque)
+┌─────────────▼────────────────────────────────────────────────┐
+│  macOS Native                                                │
+│  ┌─────────────────┐    ┌──────────────────────┐             │
+│  │ segway_bridge.py │◄──►│  MuJoCo Simulator   │             │
+│  │ (WS client)      │    │  segway_sim.py      │             │
+│  └─────────────────┘    │  + STL meshes        │             │
+│                          └──────────────────────┘             │
 └──────────────────────────────────────────────────────────────┘
 ```
 
+## Use Case Scenario (LLM-based LQR Control)
+
+본 프로젝트는 단순한 하드코딩된 명령을 넘어, **LLM(대형 언어 모델)이 제어 시스템의 최상위 계획자(High-level Planner) 역할**을 수행하는 구조를 갖추고 있습니다.
+
+1. **Natural Language Input** — 사용자가 터미널이나 챗봇을 통해 일상 언어로 명령합니다.
+   > "앞으로 1.5미터 부드럽게 이동해", "로봇 진동이 너무 심한데 튜닝 좀 해줘"
+2. **LLM Intent Parsing (`gemini_nlp_node`)** — ROS2 네이티브 노드에 탑재된 Gemini API가 사용자의 의도를 분석하여, JSON 형태의 제어 명령으로 변환합니다.
+3. **ROS2 Middleware** — 변환된 데이터는 외부 서버를 거치지 않고 `/segway/cmd_reference` 토픽을 통해 발행됩니다.
+4. **LQR Gain Scheduling** — `lqr_controller_node`가 목표 상태를 업데이트하거나, LQR 제어기의 Q/R 가중치를 실시간으로 재조정합니다 (On-the-fly Tuning).
+5. **MuJoCo Simulation** — 계산된 최적 휠 토크가 WebSocket 브리지를 통해 물리 엔진으로 전달되어, Segway가 즉각 반응합니다.
+
 ## Features
 
-- **LQR Balancing** — 선형화된 Segway 모델 기반 최적 제어
+- **LQR Balancing** — 선형화된 Segway 모델 기반 최적 제어 (CARE solver + rollback)
+- **Gemini NLP Node** — 자연어 → JSON 명령 변환 (rate limiting, 스키마 검증)
 - **MuJoCo Simulation** — 실제 STL 메쉬를 사용한 물리 시뮬레이션
 - **ROSClaw + OpenClaw** — AI 에이전트로 자연어 제어 (이동, 정지, 게인 조정 등)
+- **CI/CD Pipeline** — GitHub Actions (ruff lint + 38 unit tests + Docker arm64 build)
 - **WebSocket Bridge** — macOS ↔ Docker ROS2 안정적 통신
 - **Docker First** — Apple Silicon (M4) 네이티브 지원
 
@@ -81,8 +96,17 @@ rosclaw-mujoco/
 ├── ros2_ws/src/                     # ★ NEW: ROS2 노드
 │   └── segway_controller/
 │       ├── lqr_controller_node.py   # ROS2 LQR 제어 노드
+│       ├── gemini_nlp_node.py       # ★ Gemini API 자연어 파싱 노드
+│       ├── nlp_cli_node.py          # ★ 터미널 입력 발행 노드
 │       ├── discovery_node.py        # ROSClaw 자동탐색 노드
 │       └── params.yaml              # 물리 파라미터 + LQR 가중치
+│
+├── tests/                           # ★ NEW: 단위 테스트 (38개)
+│   ├── conftest.py                  # ROS2/Gemini mock fixtures
+│   ├── test_gemini_nlp_node.py      # NLP 노드 테스트 (21개)
+│   └── test_lqr_controller_node.py  # LQR 노드 테스트 (17개)
+│
+├── .github/workflows/ci.yml        # ★ NEW: CI/CD 파이프라인
 │
 ├── extensions/                      # ★ NEW: OpenClaw 플러그인
 │   └── openclaw-plugin/
@@ -167,7 +191,18 @@ docker exec segway_ros2 bash -c \
   "source /opt/ros/humble/setup.bash && ros2 topic echo /segway/state"
 ```
 
-### Step 4: OpenClaw 연동 (선택)
+### Step 4: Gemini 자연어 제어 (선택)
+
+```bash
+# API 키 설정 (https://aistudio.google.com/app/apikey 에서 발급)
+export GOOGLE_API_KEY="your-key-here"
+
+# CLI로 자연어 명령 입력
+python ros2_ws/src/segway_controller/nlp_cli_node.py
+# → "앞으로 1미터 이동해" 입력 → Gemini가 JSON 파싱 → LQR 제어기로 전달
+```
+
+### Step 5: OpenClaw 연동 (선택)
 
 ```bash
 brew install node
@@ -182,7 +217,8 @@ pnpm install && pnpm build
 |---|---|---|---|
 | `/segway/state` | MuJoCo → ROS2 | 100 | 로봇 상태 (theta, x, velocity) |
 | `/segway/cmd_torque` | ROS2 → MuJoCo | 100 | 휠 토크 명령 |
-| `/segway/cmd_reference` | OpenClaw → ROS2 | on-demand | 이동/정지/게인 명령 |
+| `/segway/nlp_input` | User → Gemini NLP | on-demand | 자연어 텍스트 입력 |
+| `/segway/cmd_reference` | Gemini NLP / OpenClaw → LQR | on-demand | JSON 제어 명령 |
 | `/segway/controller/status` | ROS2 → All | 10 | 컨트롤러 상태 |
 | `/rosclaw/capabilities` | Discovery → All | 1 | 로봇 능력 정보 (자동탐색) |
 
@@ -220,6 +256,21 @@ pnpm install && pnpm build
 "긴급 정지"                      → segway_stop
 "LQR 게인 Q=[200,20,2,10]으로"   → segway_tune(Q_diag=[200,20,2,10])
 ```
+
+## Testing & CI/CD
+
+```bash
+# 단위 테스트 실행 (Gemini API mock — 과금 없음)
+pip install -r requirements-dev.txt
+pytest tests/ -v
+
+# Lint 검사
+ruff check .
+```
+
+GitHub Actions가 모든 push/PR에 대해 자동으로 실행합니다:
+- **lint-and-test** — ruff 코드 스타일 + pytest 38개 테스트
+- **docker-build** — Docker arm64 이미지 빌드 검증
 
 ## Troubleshooting
 
