@@ -11,12 +11,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# google.generativeai mock (conftest 이후, import 전에 설정)
-mock_genai = types.ModuleType("google.generativeai")
-mock_genai.configure = MagicMock()
-mock_genai.GenerativeModel = MagicMock()
-sys.modules.setdefault("google", types.ModuleType("google"))
-sys.modules["google.generativeai"] = mock_genai
+# google.genai mock (conftest 이후, import 전에 설정)
+mock_genai = types.ModuleType("google.genai")
+mock_genai.Client = MagicMock()
+google_mod = sys.modules.get("google") or types.ModuleType("google")
+google_mod.genai = mock_genai
+sys.modules["google"] = google_mod
+sys.modules["google.genai"] = mock_genai
 
 os.environ["GOOGLE_API_KEY"] = "test-key-for-ci"
 
@@ -96,7 +97,7 @@ class TestValidateCommand:
 
 class TestProcessCommand:
     def test_move_to(self, nlp_node):
-        nlp_node.model.generate_content.return_value = _make_gemini_response(
+        nlp_node._client.models.generate_content.return_value = _make_gemini_response(
             '{"command": "move_to", "x": 2.0}'
         )
         nlp_node._process_command("앞으로 2미터 이동해")
@@ -107,7 +108,7 @@ class TestProcessCommand:
         assert published["x"] == 2.0
 
     def test_set_velocity(self, nlp_node):
-        nlp_node.model.generate_content.return_value = _make_gemini_response(
+        nlp_node._client.models.generate_content.return_value = _make_gemini_response(
             '{"command": "set_velocity", "velocity": 0.5}'
         )
         nlp_node._process_command("속도 0.5로 설정해")
@@ -118,7 +119,7 @@ class TestProcessCommand:
         assert published["velocity"] == 0.5
 
     def test_emergency_stop(self, nlp_node):
-        nlp_node.model.generate_content.return_value = _make_gemini_response(
+        nlp_node._client.models.generate_content.return_value = _make_gemini_response(
             '```json\n{"command": "disable"}\n```'
         )
         nlp_node._process_command("긴급 정지!")
@@ -128,7 +129,7 @@ class TestProcessCommand:
         assert published["command"] == "disable"
 
     def test_update_gains(self, nlp_node):
-        nlp_node.model.generate_content.return_value = _make_gemini_response(
+        nlp_node._client.models.generate_content.return_value = _make_gemini_response(
             '{"command": "update_gains", "Q_diag": [150, 15, 1.5, 8], "R_val": 0.5}'
         )
         nlp_node._process_command("진동 줄여줘")
@@ -139,7 +140,7 @@ class TestProcessCommand:
         assert published["Q_diag"] == [150, 15, 1.5, 8]
 
     def test_reset(self, nlp_node):
-        nlp_node.model.generate_content.return_value = _make_gemini_response(
+        nlp_node._client.models.generate_content.return_value = _make_gemini_response(
             '{"command": "reset"}'
         )
         nlp_node._process_command("초기화해")
@@ -148,7 +149,7 @@ class TestProcessCommand:
         assert published["command"] == "reset"
 
     def test_invalid_response_not_published(self, nlp_node):
-        nlp_node.model.generate_content.return_value = _make_gemini_response(
+        nlp_node._client.models.generate_content.return_value = _make_gemini_response(
             "죄송합니다, 이해할 수 없는 명령입니다."
         )
         nlp_node._process_command("하늘을 날아줘")
@@ -156,7 +157,7 @@ class TestProcessCommand:
         nlp_node.cmd_pub.publish.assert_not_called()
 
     def test_api_exception_handled(self, nlp_node):
-        nlp_node.model.generate_content.side_effect = Exception("API 오류")
+        nlp_node._client.models.generate_content.side_effect = Exception("API 오류")
         nlp_node._process_command("이동해")
 
         nlp_node.cmd_pub.publish.assert_not_called()
@@ -166,7 +167,7 @@ class TestProcessCommand:
 
 class TestRateLimiting:
     def test_rate_limit_blocks_rapid_calls(self, nlp_node):
-        nlp_node.model.generate_content.reset_mock()
+        nlp_node._client.models.generate_content.reset_mock()
         nlp_node._min_interval = 10.0
         nlp_node._last_call_time = 9999999999.0  # 미래 시간
 
@@ -174,4 +175,4 @@ class TestRateLimiting:
         msg.data = "앞으로 이동해"
         nlp_node._on_nlp_input(msg)
 
-        nlp_node.model.generate_content.assert_not_called()
+        nlp_node._client.models.generate_content.assert_not_called()

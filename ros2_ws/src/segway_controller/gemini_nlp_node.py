@@ -18,7 +18,7 @@ from rclpy.node import Node
 from std_msgs.msg import String
 
 try:
-    import google.generativeai as genai
+    from google import genai
 except ImportError:
     genai = None
 
@@ -44,7 +44,7 @@ class GeminiNLPNode(Node):
         super().__init__("gemini_nlp_node")
 
         # ── Parameters ──
-        self.declare_parameter("gemini_model", "gemini-2.0-flash")
+        self.declare_parameter("gemini_model", "gemini-2.5-flash")
         self.declare_parameter("min_call_interval", 2.0)
 
         model_name = self.get_parameter("gemini_model").value
@@ -54,8 +54,8 @@ class GeminiNLPNode(Node):
         # ── Gemini API 설정 ──
         if genai is None:
             raise RuntimeError(
-                "google-generativeai 패키지가 설치되지 않았습니다. "
-                "pip install google-generativeai"
+                "google-genai 패키지가 설치되지 않았습니다. "
+                "pip install google-genai"
             )
 
         api_key = os.environ.get("GOOGLE_API_KEY")
@@ -64,8 +64,8 @@ class GeminiNLPNode(Node):
                 "GOOGLE_API_KEY 환경변수가 설정되지 않았습니다!"
             )
 
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel(model_name)
+        self._client = genai.Client(api_key=api_key)
+        self._model_name = model_name
 
         # ── ROS2 Pub/Sub ──
         self.cmd_pub = self.create_publisher(String, "/segway/cmd_reference", 10)
@@ -101,7 +101,9 @@ class GeminiNLPNode(Node):
 
         try:
             self.get_logger().info(f"Gemini API 호출 중... 입력: {text}")
-            response = self.model.generate_content(prompt)
+            response = self._client.models.generate_content(
+                model=self._model_name, contents=prompt
+            )
             raw_text = response.text.strip()
 
             command_data = self._extract_json(raw_text)
