@@ -51,6 +51,27 @@ services:
           --ros-args --params-file /root/ros2_ws/src/segway_controller/params.yaml;
       "
 
+  # ── Gemini NLP Node (NEW — Natural Language Control) ──
+  gemini_nlp:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.ros2
+    platform: linux/arm64
+    container_name: segway_nlp
+    depends_on:
+      ros2_bridge:
+        condition: service_healthy
+    environment:
+      - ROS_DOMAIN_ID=0
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+    volumes:
+      - ./ros2_ws:/root/ros2_ws:ro
+    command: >
+      bash -lc "
+        source /opt/ros/humble/setup.bash;
+        python3 /root/ros2_ws/src/segway_controller/gemini_nlp_node.py;
+      "
+
   # ── ROSClaw Discovery Node (NEW — for OpenClaw) ──
   rosclaw_discovery:
     build:
