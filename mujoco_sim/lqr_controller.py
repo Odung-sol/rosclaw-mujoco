@@ -23,7 +23,7 @@ class SegwayLQR:
         if state.size != 4:
             raise ValueError("state must be length 4")
 
-        Tw = -(self.K @ state).item()           # scalar
+        Tw = (self.K @ state).item()              # scalar
         tau_each = Tw / 2.0
         tau_each = float(np.clip(tau_each, -self.torque_limit, self.torque_limit))
         return tau_each, tau_each

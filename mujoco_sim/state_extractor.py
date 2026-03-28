@@ -6,8 +6,8 @@ class SegwayStateExtractor:
     Extract state for LQR:
     x = [theta, theta_dot, phi, phi_dot]
 
-    theta     = body roll angle (rad)  (quat -> roll)
-    theta_dot = body roll rate (rad/s) (approx qvel index used)
+    theta     = body pitch angle (rad)  (quat -> pitch, Y축 앞뒤 기울기)
+    theta_dot = body pitch rate (rad/s)
     phi       = average wheel angle (rad)
     phi_dot   = average wheel velocity (rad/s)
     """
@@ -27,20 +27,17 @@ class SegwayStateExtractor:
 
     def get_theta(self, data):
         """
-        Body roll angle from quaternion.
+        Body pitch angle from quaternion (앞뒤 기울기).
         MuJoCo quaternion order: [w, x, y, z]
         """
         w, x, y, z = data.qpos[3:7]
-        sinr_cosp = 2.0 * (w * x + y * z)
-        cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-        return np.arctan2(sinr_cosp, cosr_cosp)
+        sin_pitch = 2.0 * (w * y - x * z)
+        cos_pitch = 1.0 - 2.0 * (y * y + x * x)
+        return np.arctan2(sin_pitch, cos_pitch)
 
     def get_theta_dot(self, data):
-        """
-        Body roll rate (rough). This depends on your model DOF layout.
-        If it misbehaves, we will remap.
-        """
-        return float(data.qvel[3])
+        """Body pitch rate (Y축 각속도)."""
+        return float(data.qvel[4])
 
     def get_phi(self, data):
         return float((data.qpos[self.Lq] + data.qpos[self.Rq]) / 2.0)
