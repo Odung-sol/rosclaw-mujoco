@@ -24,11 +24,11 @@ class SegwayLQRController(Node):
         super().__init__("segway_lqr_controller")
 
         # ── Declare Parameters (params.yaml에서 로드) ──
-        self.declare_parameter("body_mass", 10.0)
-        self.declare_parameter("wheel_mass", 1.0)
-        self.declare_parameter("body_length", 0.5)
+        self.declare_parameter("body_mass", 37.65)
+        self.declare_parameter("wheel_mass", 0.85)
+        self.declare_parameter("body_length", 0.14)
         self.declare_parameter("wheel_radius", 0.1)
-        self.declare_parameter("body_inertia", 0.5)
+        self.declare_parameter("body_inertia", 5.42)
         self.declare_parameter("max_torque", 20.0)
         self.declare_parameter("Q_diag", [100.0, 10.0, 1.0, 5.0])
         self.declare_parameter("R_val", 1.0)
@@ -75,7 +75,8 @@ class SegwayLQRController(Node):
         self.get_logger().info("Segway LQR controller ready.")
 
     def _compute_lqr_gain(self):
-        """Linearized Segway → CARE solver → K gain matrix."""
+        """Linearized Segway → CARE solver → K gain matrix.
+        Falls back to MATLAB-derived K if CARE fails."""
         M, m, L, g = self.M, self.m, self.L, self.g
         I_b = self.I_b
         denom = I_b * (M + m) - M**2 * L**2
@@ -93,9 +94,16 @@ class SegwayLQRController(Node):
             [M * L / denom],
         ])
 
-        P = linalg.solve_continuous_are(A, B, self.Q, self.R_lqr)
-        K = np.linalg.inv(self.R_lqr) @ B.T @ P
-        return K
+        try:
+            P = linalg.solve_continuous_are(A, B, self.Q, self.R_lqr)
+            K = np.linalg.inv(self.R_lqr) @ B.T @ P
+            return K
+        except np.linalg.LinAlgError:
+            K_fallback = np.array([[-80.0, -25.0, -8.0, -15.0]])
+            self.get_logger().warn(
+                f"CARE solver failed, using fallback K = {K_fallback.tolist()}"
+            )
+            return K_fallback
 
     def _on_state(self, msg: String):
         """State → LQR → torque."""
@@ -118,7 +126,7 @@ class SegwayLQRController(Node):
             s["x_dot"] - self.v_ref,
         ])
 
-        torque = float((-self.K @ x_vec).item())
+        torque = float((self.K @ x_vec).item())
         torque = np.clip(torque, -self.max_torque, self.max_torque)
         self._publish_torque(torque, s.get("timestamp", 0))
 

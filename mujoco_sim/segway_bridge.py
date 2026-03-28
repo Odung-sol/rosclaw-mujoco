@@ -3,16 +3,9 @@
 segway_bridge.py — MuJoCo ↔ ROS2 WebSocket Bridge
 macOS에서 실행. 기존 segway_sim.py와 함께 사용.
 
-사용법:
-  from segway_bridge import SegwayROSBridge
-
-  bridge = SegwayROSBridge()
-  bridge.connect()
-  bridge.start_listener()
-
-  # simulation loop에서:
-  bridge.publish_state(theta, theta_dot, x, x_dot)
-  torque = bridge.get_torque()
+Uses two WebSocket connections:
+  - ws_pub: publishes state to ROS2
+  - ws_sub: receives torque commands from ROS2
 """
 
 import json
@@ -28,22 +21,27 @@ MSG_TYPE = "std_msgs/msg/String"
 
 
 class SegwayROSBridge:
-    """Thread-safe WebSocket bridge to rosbridge."""
+    """Thread-safe WebSocket bridge to rosbridge (dual connection)."""
 
     def __init__(self, url=ROSBRIDGE_URL):
         self.url = url
-        self.ws = None
+        self.ws_pub = None   # for publishing state
+        self.ws_sub = None   # for receiving torque
         self.latest_torque = 0.0
         self.latest_reference = {"command": "none"}
         self.connected = False
         self._lock = threading.Lock()
 
     def connect(self, max_retries=10, retry_delay=2.0):
-        """Connect to rosbridge with retry logic."""
+        """Connect two WebSocket connections to rosbridge."""
         for attempt in range(max_retries):
             try:
-                self.ws = websocket.create_connection(
+                self.ws_pub = websocket.create_connection(
                     self.url, timeout=5.0,
+                    ping_interval=10, ping_timeout=5,
+                )
+                self.ws_sub = websocket.create_connection(
+                    self.url, timeout=0.1,
                     ping_interval=10, ping_timeout=5,
                 )
                 self.connected = True
@@ -56,30 +54,30 @@ class SegwayROSBridge:
         return False
 
     def _setup_topics(self):
-        """Advertise and subscribe to topics."""
-        # Advertise state topic
-        self.ws.send(json.dumps({
+        """Advertise on pub connection, subscribe on sub connection."""
+        # Advertise state topic (pub connection)
+        self.ws_pub.send(json.dumps({
             "op": "advertise", "topic": STATE_TOPIC, "type": MSG_TYPE,
         }))
-        # Subscribe to torque commands
-        self.ws.send(json.dumps({
+        # Subscribe to torque commands (sub connection)
+        self.ws_sub.send(json.dumps({
             "op": "subscribe", "topic": CMD_TOPIC, "type": MSG_TYPE,
             "throttle_rate": 0,
         }))
-        # Subscribe to reference commands (from OpenClaw)
-        self.ws.send(json.dumps({
+        # Subscribe to reference commands (sub connection)
+        self.ws_sub.send(json.dumps({
             "op": "subscribe", "topic": REF_TOPIC, "type": MSG_TYPE,
             "throttle_rate": 0,
         }))
-        time.sleep(2.0)  # wait for topic discovery
+        time.sleep(2.0)
         print("[Bridge] Topics ready.")
 
     def start_listener(self):
-        """Start background thread to receive commands."""
+        """Start background thread to receive commands on ws_sub."""
         def _listen():
             while self.connected:
                 try:
-                    raw = self.ws.recv()
+                    raw = self.ws_sub.recv()
                     msg = json.loads(raw)
                     topic = msg.get("topic")
 
@@ -106,7 +104,7 @@ class SegwayROSBridge:
 
     def publish_state(self, theta, theta_dot, x, x_dot,
                       wheel_angle=0.0, wheel_vel=0.0, sim_time=None):
-        """Publish Segway state to ROS2."""
+        """Publish Segway state to ROS2 (via ws_pub)."""
         if not self.connected:
             return
         state = {
@@ -116,7 +114,7 @@ class SegwayROSBridge:
             "wheel_angle": float(wheel_angle), "wheel_vel": float(wheel_vel),
         }
         try:
-            self.ws.send(json.dumps({
+            self.ws_pub.send(json.dumps({
                 "op": "publish", "topic": STATE_TOPIC,
                 "msg": {"data": json.dumps(state)},
             }))
@@ -134,15 +132,14 @@ class SegwayROSBridge:
             return self.latest_reference.copy()
 
     def close(self):
-        """Gracefully shut down."""
+        """Gracefully shut down both connections."""
         self.connected = False
-        if self.ws:
-            try:
-                self.ws.send(json.dumps({"op": "unadvertise", "topic": STATE_TOPIC}))
-                time.sleep(0.3)
-                self.ws.close()
-            except Exception:
-                pass
+        for ws in [self.ws_pub, self.ws_sub]:
+            if ws:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
         print("[Bridge] Closed.")
 
 

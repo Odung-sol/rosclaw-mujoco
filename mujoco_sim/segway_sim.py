@@ -11,18 +11,13 @@ from state_extractor import SegwayStateExtractor
 from lqr_controller import SegwayLQR
 
 MODEL_PATH = "segway.xml"
-
-# 시뮬 타임스텝: 모델 opt.timestep과 다르면 보기가 이상할 수 있음
-# 일단 네가 쓰던 값 유지
 SIM_DT = 0.002
-
 TORQUE_LIMIT = 20.0
-
-# UDP는 일단 유지하되, 없어도 시뮬은 돌아가게 try/except 처리
 UDP_STATE_PORT = 9091
 
+
 class SegwaySimulation:
-    def __init__(self):
+    def __init__(self, use_ros2=False):
         self.model = mujoco.MjModel.from_xml_path(MODEL_PATH)
         self.data  = mujoco.MjData(self.model)
 
@@ -37,13 +32,36 @@ class SegwaySimulation:
         self.failed = False
         self.log_data = []
 
+        # ROS2 bridge mode
+        self.use_ros2 = use_ros2
+        self.bridge = None
+        if use_ros2:
+            self._init_bridge()
+
+    def _init_bridge(self):
+        """Connect to ROS2 via rosbridge WebSocket."""
+        from segway_bridge import SegwayROSBridge
+        self.bridge = SegwayROSBridge()
+        if not self.bridge.connect():
+            raise RuntimeError(
+                "Failed to connect to rosbridge. "
+                "Run: docker compose up -d"
+            )
+        self.bridge.start_listener()
+
+        # Wait for first torque response to ensure round-trip works
+        print("[ROS2] Waiting for LQR controller response...")
+        self.bridge.publish_state(0.01, 0.0, 0.0, 0.0, sim_time=0.0)
+        for _ in range(50):  # up to 5 seconds
+            time.sleep(0.1)
+            if abs(self.bridge.get_torque()) > 1e-6:
+                break
+        print("[ROS2] Bridge connected. LQR runs in Docker.")
+
     def reset(self, pitch_deg=2.0):
         mujoco.mj_resetData(self.model, self.data)
 
-        # quaternion로 자세 초기화 (네가 쓰던 방식 유지)
         pitch = np.deg2rad(pitch_deg)
-        # qpos[3:7] = quat (w,x,y,z) 라는 가정 하에
-        # 여기서는 y축 회전(피치)처럼 넣던 너의 방식 유지
         self.data.qpos[3] = np.cos(pitch/2)
         self.data.qpos[5] = np.sin(pitch/2)
 
@@ -53,9 +71,9 @@ class SegwaySimulation:
         mujoco.mj_forward(self.model, self.data)
 
     def step(self):
+        """One simulation step using local LQR."""
         state = self.ext.get_state(self.data)
 
-        # 넘어짐 판정
         if abs(state[0]) > np.deg2rad(30):
             self.failed = True
             self.data.ctrl[self.L_act] = 0.0
@@ -70,17 +88,50 @@ class SegwaySimulation:
         mujoco.mj_step(self.model, self.data)
         return state, tL, tR
 
+    def step_ros2(self):
+        """One simulation step using ROS2 LQR (via bridge)."""
+        theta = self.ext.get_theta(self.data)
+        theta_dot = self.ext.get_theta_dot(self.data)
+        x = float(self.data.qpos[0])
+        x_dot = float(self.data.qvel[0])
+        wheel_angle = self.ext.get_phi(self.data)
+        wheel_vel = self.ext.get_phi_dot(self.data)
+
+        # Send state and wait briefly for response
+        self.bridge.publish_state(
+            theta, theta_dot, x, x_dot,
+            wheel_angle, wheel_vel,
+            sim_time=float(self.data.time),
+        )
+        time.sleep(0.01)  # 10ms for WebSocket round-trip
+
+        # Get latest torque computed by ROS2 LQR node
+        torque = self.bridge.get_torque()
+
+        # Fail detection
+        if abs(theta) > np.deg2rad(30):
+            self.failed = True
+            torque = 0.0
+
+        # Apply same torque to both wheels
+        torque = float(np.clip(torque, -TORQUE_LIMIT, TORQUE_LIMIT))
+        self.data.ctrl[self.L_act] = torque
+        self.data.ctrl[self.R_act] = torque
+
+        mujoco.mj_step(self.model, self.data)
+        state = np.array([theta, theta_dot, x, x_dot])
+        return state, torque, torque
+
     def send_state_udp(self, state, tL, tR):
-        # phi는 LQR용(≈0)과 표시용(실제 바퀴 각도)을 분리
-        theta_disp   = self.ext.get_theta_display(self.data)   # 실제 pitch 각도
+        theta_disp   = self.ext.get_theta_display(self.data)
         phi_disp     = self.ext.get_phi_display(self.data)
         phi_dot_disp = self.ext.get_phi_dot_display(self.data)
 
         msg = json.dumps({
             "time":      float(self.data.time),
-            "theta":     theta_disp,      # 그래프 표시용 (실제 pitch 기울기)
+            "theta":     theta_disp,
             "theta_dot": float(state[1]),
-            "phi":       phi_disp,        # 그래프 표시용 (실제 바퀴 각도)
+            "phi":       phi_disp,
             "phi_dot":   phi_dot_disp,
             "tau_L":     float(tL),
             "tau_R":     float(tR),
@@ -94,20 +145,28 @@ class SegwaySimulation:
     def run_viewer(self, pitch_deg=2.0):
         self.reset(pitch_deg)
         count = 0
+        step_fn = self.step_ros2 if self.use_ros2 else self.step
 
         with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
             while viewer.is_running():
                 t0 = time.time()
 
-                state, tL, tR = self.step()
+                state, tL, tR = step_fn()
                 count += 1
 
-                # UDP: 너무 자주 보내면 부담될 수 있어서 5 유지
                 if count % 5 == 0:
                     self.send_state_udp(state, tL, tR)
 
                 if count % 500 == 0:
-                    self.ext.print_state(self.data)
+                    if self.use_ros2:
+                        theta_deg = np.degrees(state[0])
+                        x = state[2]
+                        print(f"t={self.data.time:7.3f}  "
+                              f"theta={theta_deg:+7.2f}deg  "
+                              f"x={x:+7.3f}m  "
+                              f"torque={tL:+7.3f}Nm")
+                    else:
+                        self.ext.print_state(self.data)
 
                 viewer.sync()
 
@@ -118,15 +177,14 @@ class SegwaySimulation:
     def run_headless(self, duration=10.0, pitch_deg=2.0):
         self.reset(pitch_deg)
         steps = int(duration / SIM_DT)
+        step_fn = self.step_ros2 if self.use_ros2 else self.step
 
         for i in range(steps):
-            state, tL, tR = self.step()
+            state, tL, tR = step_fn()
             self.log_data.append({
                 "time": float(self.data.time),
                 "theta": float(state[0]),
                 "theta_dot": float(state[1]),
-                "phi": float(state[2]),
-                "phi_dot": float(state[3]),
                 "tau_L": float(tL),
                 "tau_R": float(tR),
             })
@@ -135,7 +193,10 @@ class SegwaySimulation:
                 self.send_state_udp(state, tL, tR)
 
             if i % 500 == 0:
-                self.ext.print_state(self.data)
+                theta_deg = np.degrees(state[0])
+                print(f"t={self.data.time:7.3f}  "
+                      f"theta={theta_deg:+7.2f}deg  "
+                      f"torque={tL:+7.3f}Nm")
 
             if self.failed:
                 print(f"FAILED at t={self.data.time:.3f}")
@@ -153,16 +214,20 @@ class SegwaySimulation:
             self.state_sock.close()
         except Exception:
             pass
+        if self.bridge:
+            self.bridge.close()
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--headless", action="store_true")
+    p.add_argument("--ros2", action="store_true",
+                   help="Use ROS2 LQR controller via rosbridge (requires docker compose up)")
     p.add_argument("--duration", type=float, default=10.0)
     p.add_argument("--pitch", type=float, default=2.0)
     args = p.parse_args()
 
-    sim = SegwaySimulation()
+    sim = SegwaySimulation(use_ros2=args.ros2)
     try:
         if args.headless:
             sim.run_headless(args.duration, args.pitch)
