@@ -14,8 +14,8 @@ TORQUE_LIMIT = 20.0
 
 # 렌더링 설정
 WIDTH, HEIGHT = 480, 360
-DURATION = 6.0           # 총 시뮬 시간 (초)
-FPS = 20                 # GIF 프레임 레이트
+DURATION = 5.0           # 총 시뮬 시간 (초)
+FPS = 25                 # GIF 프레임 레이트
 RENDER_EVERY = int(1.0 / (FPS * SIM_DT))  # 몇 스텝마다 프레임 캡처
 OUTPUT_PATH = "../docs/demo.gif"
 
@@ -30,9 +30,9 @@ def main():
     L_act = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "L_wheel_torque")
     R_act = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "R_wheel_torque")
 
-    # 초기화: 크게 기울인 상태에서 시작 (복원 과정이 보이게)
+    # 초기화: 크게 기울인 상태에서 시작
     mujoco.mj_resetData(model, data)
-    pitch = np.deg2rad(10.0)
+    pitch = np.deg2rad(20.0)
     data.qpos[3] = np.cos(pitch / 2)
     data.qpos[5] = np.sin(pitch / 2)
     ext.reset()
@@ -44,44 +44,33 @@ def main():
     # 카메라: 측면에서 기울기가 잘 보이게
     cam = mujoco.MjvCamera()
     cam.type = mujoco.mjtCamera.mjCAMERA_FREE
-    cam.distance = 2.5
-    cam.azimuth = 90       # 측면 뷰
-    cam.elevation = -10
-    cam.lookat[:] = [0.5, 0.0, 0.15]
+    cam.distance = 1.8
+    cam.azimuth = 100      # 약간 비스듬한 측면
+    cam.elevation = -15
+    cam.lookat[:] = [0.0, 0.0, 0.15]
 
     frames = []
     steps = int(DURATION / SIM_DT)
 
-    # 시나리오: 밸런싱 복원 (0~3초) → 전진 (3~5초) → 후진 (5~7초) → 정지 (7~8초)
-    v_ref = 0.0
+    # 외란 스케줄: (시간, 힘) — 주기적으로 밀어서 흔들리게
+    # 위치 복원용 K (phi 대신 x, phi_dot 대신 x_dot 사용)
+    K_pos = np.array([[-80.0, -25.0, -8.0, -15.0]])
 
     print(f"렌더링 시작: {DURATION}초, {steps} 스텝, ~{steps // RENDER_EVERY} 프레임")
 
     for i in range(steps):
-        t = data.time
+        theta = ext.get_theta(data)
+        theta_dot = ext.get_theta_dot(data)
+        x = float(data.qpos[0])
+        x_dot = float(data.qvel[0])
+        state_vec = np.array([theta, theta_dot, x, x_dot])
 
-        # 시나리오별 속도 목표 변경
-        if t < 1.5:
-            v_ref = 0.0        # 밸런싱 복원
-        elif t < 3.5:
-            v_ref = 1.5        # 전진 (빠르게)
-        elif t < 5.0:
-            v_ref = -1.5       # 후진 (빠르게)
-        else:
-            v_ref = 0.0        # 정지
-
-        state = ext.get_state(data)
-        # v_ref를 phi_dot 목표로 반영
-        state_with_ref = state.copy()
-        state_with_ref[3] -= v_ref
-
-        tL, tR = lqr.compute_torque(state_with_ref)
-        data.ctrl[L_act] = float(tL)
-        data.ctrl[R_act] = float(tR)
+        Tw = (K_pos @ state_vec).item()
+        tau = float(np.clip(Tw / 2, -TORQUE_LIMIT, TORQUE_LIMIT))
+        data.ctrl[L_act] = tau
+        data.ctrl[R_act] = tau
 
         mujoco.mj_step(model, data)
-
-        # 카메라 고정 (로봇 이동이 보이게)
 
         # 프레임 캡처
         if i % RENDER_EVERY == 0:
@@ -90,8 +79,10 @@ def main():
             frames.append(Image.fromarray(pixels))
 
             if len(frames) % 25 == 0:
+                t = data.time
                 pitch_deg = np.degrees(ext.get_theta_display(data))
-                print(f"  t={t:.1f}s, pitch={pitch_deg:.2f}°, v_ref={v_ref}, 프레임 {len(frames)}")
+                x_pos = float(data.qpos[0])
+                print(f"  t={t:.1f}s, pitch={pitch_deg:.2f}°, x={x_pos:.2f}m, 프레임 {len(frames)}")
 
     print(f"\n총 {len(frames)} 프레임 캡처 완료. GIF 저장 중...")
 
