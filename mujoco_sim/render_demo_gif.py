@@ -44,10 +44,10 @@ def main():
     # 카메라: 측면에서 기울기가 잘 보이게
     cam = mujoco.MjvCamera()
     cam.type = mujoco.mjtCamera.mjCAMERA_FREE
-    cam.distance = 1.5
+    cam.distance = 2.5
     cam.azimuth = 90       # 측면 뷰
-    cam.elevation = -15
-    cam.lookat[:] = [0.0, 0.0, 0.15]
+    cam.elevation = -10
+    cam.lookat[:] = [0.5, 0.0, 0.15]
 
     frames = []
     steps = int(DURATION / SIM_DT)
@@ -61,12 +61,12 @@ def main():
         t = data.time
 
         # 시나리오별 속도 목표 변경
-        if t < 2.0:
+        if t < 1.5:
             v_ref = 0.0        # 밸런싱 복원
-        elif t < 4.0:
-            v_ref = 0.5        # 전진
-        elif t < 5.5:
-            v_ref = -0.3       # 후진
+        elif t < 3.5:
+            v_ref = 1.5        # 전진 (빠르게)
+        elif t < 5.0:
+            v_ref = -1.5       # 후진 (빠르게)
         else:
             v_ref = 0.0        # 정지
 
@@ -81,8 +81,7 @@ def main():
 
         mujoco.mj_step(model, data)
 
-        # 카메라가 로봇을 따라가게
-        cam.lookat[0] = float(data.qpos[0])
+        # 카메라 고정 (로봇 이동이 보이게)
 
         # 프레임 캡처
         if i % RENDER_EVERY == 0:
