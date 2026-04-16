@@ -1,13 +1,14 @@
 segway_lqr_controller:
   ros__parameters:
     # ── Segway Physical Parameters ──
-    # 이 값들을 mujoco_sim/segway.xml 모델과 일치시키세요
-    body_mass: 10.0        # kg
-    wheel_mass: 1.0        # kg
-    body_length: 0.5       # m (CoM height)
-    wheel_radius: 0.1      # m
-    body_inertia: 0.5      # kg·m²
-    max_torque: 20.0       # N·m
+    # 이 값들은 mujoco_sim/segway.xml MJCF 모델 및 lqr_controller_node.py 기본값과
+    # 일치해야 합니다. 변경 시 세 곳(MJCF / 노드 기본값 / 이 파일)을 모두 수정하세요.
+    body_mass: 37.65       # kg — MJCF body inertial mass
+    wheel_mass: 0.85       # kg — MJCF wheel inertial mass
+    body_length: 0.14      # m  — CoM height above wheel axle (MJCF)
+    wheel_radius: 0.1      # m  — MJCF wheel geom radius
+    body_inertia: 5.42     # kg·m² — MJCF body diaginertia (pitch axis)
+    max_torque: 20.0       # N·m — motor saturation (safety clip)
 
     # ── LQR Weights ──
     # state = [theta, theta_dot, x, x_dot]
