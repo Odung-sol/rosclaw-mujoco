@@ -159,11 +159,26 @@ class SegwayLQRController(Node):
         elif cmd == "update_gains":
             Q_new = ref.get("Q_diag")
             R_new = ref.get("R_val")
+            # Validate BEFORE touching self.Q / self.R_lqr. The rosbridge
+            # WebSocket has no auth and accepts arbitrary JSON; an unvalidated
+            # Q_diag of length 1000 would OOM np.diag / CARE solver.
+            if Q_new is not None and not self._is_valid_q_diag(Q_new):
+                self.get_logger().warn(
+                    f"→ update_gains rejected: invalid Q_diag={Q_new!r} "
+                    f"(expected list of 4 finite positive floats)"
+                )
+                return
+            if R_new is not None and not self._is_valid_r_val(R_new):
+                self.get_logger().warn(
+                    f"→ update_gains rejected: invalid R_val={R_new!r} "
+                    f"(expected positive finite float)"
+                )
+                return
             Q_backup, R_backup = self.Q.copy(), self.R_lqr.copy()
-            if Q_new:
-                self.Q = np.diag(Q_new)
-            if R_new:
-                self.R_lqr = np.array([[R_new]])
+            if Q_new is not None:
+                self.Q = np.diag([float(v) for v in Q_new])
+            if R_new is not None:
+                self.R_lqr = np.array([[float(R_new)]])
             try:
                 self.K = self._compute_lqr_gain()
                 self.get_logger().info(
@@ -178,6 +193,32 @@ class SegwayLQRController(Node):
             self.v_ref = 0.0
             self.enabled = True
             self.get_logger().info("→ RESET")
+
+    @staticmethod
+    def _is_valid_q_diag(value) -> bool:
+        """Q_diag must be a length-4 list of finite positive floats.
+
+        The state vector is [theta, theta_dot, x, x_dot] — 4 elements.
+        Each LQR weight must be > 0 for the Riccati equation to have a
+        unique positive-definite solution. `bool` is excluded on purpose;
+        Python treats it as a numeric type but it is never a meaningful
+        weight.
+        """
+        if not isinstance(value, list) or len(value) != 4:
+            return False
+        for v in value:
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                return False
+            if not np.isfinite(v) or v <= 0:
+                return False
+        return True
+
+    @staticmethod
+    def _is_valid_r_val(value) -> bool:
+        """R_val must be a finite positive scalar."""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        return bool(np.isfinite(value)) and value > 0
 
     def _publish_torque(self, torque, timestamp):
         msg = String()
