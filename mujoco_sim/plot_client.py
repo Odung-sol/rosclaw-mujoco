@@ -6,7 +6,9 @@ plot_client.py (macOS) - UDP로 오는 Segway telemetry를 실시간 플롯
 - 슬라이딩 윈도우(최근 WINDOW_S 초만 표시) → 계단 현상 제거
 """
 
-import socket, json, threading
+import socket
+import json
+import threading
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation

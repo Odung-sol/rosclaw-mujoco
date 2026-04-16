@@ -13,8 +13,12 @@ services:
     container_name: segway_ros2
     environment:
       - ROS_DOMAIN_ID=0
+    # rosbridge has NO authentication — bind to loopback so LAN peers cannot
+    # subscribe to /segway/state or publish cmd_reference / update_gains.
+    # If you ever need remote access, front it with an auth proxy (e.g. nginx
+    # + bearer token) instead of exposing 0.0.0.0:9090.
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./ros2_ws:/root/ros2_ws:ro
     command: >

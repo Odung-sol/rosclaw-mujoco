@@ -6,50 +6,131 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel stale in-progress runs when a new commit lands on the same ref.
+# Saves QEMU arm64 minutes on rapid-fire pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Default-deny at the workflow level; individual jobs opt back in if needed.
+# This neutralises the #1 GitHub Actions supply-chain risk (a compromised
+# third-party action exfiltrating repo contents via a write-scoped token).
+permissions:
+  contents: read
+
 jobs:
-  # ── Job 1: Lint + Unit Tests ──
+  # ── Job 1: Python lint + unit tests ──
   lint-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      # TODO(security): pin every `uses:` to a full commit SHA once the repo
+      # adopts dependabot so SHA bumps stay auditable. Tagged versions (v4.x)
+      # are still mutable by the publisher.
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.3.0
         with:
           python-version: "3.10"
           cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
         run: |
-          pip install -r requirements-dev.txt
-          pip install websocket-client numpy scipy
+          python -m pip install --upgrade pip
+          # Both files are pinned (`==`) so CI is reproducible. The previous
+          # inline `pip install websocket-client numpy scipy` drifted from
+          # requirements.txt — do NOT reintroduce it.
+          pip install -r requirements-dev.txt -r requirements.txt
 
       - name: Lint with ruff
-        run: ruff check ros2_ws/ tests/ --output-format=github
+        run: ruff check ros2_ws/ tests/ mujoco_sim/ --output-format=github
 
       - name: Run unit tests
         env:
           GOOGLE_API_KEY: "fake-key-for-ci"
         run: pytest tests/ -v --tb=short
 
-  # ── Job 2: Docker Build Verification ──
+  # ── Job 2: TypeScript typecheck + build ──
+  # Covers extensions/openclaw-plugin and packages/rosbridge-client — both
+  # were previously entirely uncovered by CI despite `strict: true` tsconfig.
+  typescript:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - extensions/openclaw-plugin
+          - packages/rosbridge-client
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Node
+        uses: actions/setup-node@v4.1.0
+        with:
+          node-version: "20"
+          # npm cache is disabled until package-lock.json files are committed.
+          # setup-node's `cache: npm` hard-fails if the path doesn't resolve,
+          # so we re-enable it only after a lockfile lands. The install step
+          # below already falls back to `npm install` when there is no lock.
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.package }}
+        # `npm ci` once a lockfile is committed; until then `npm install`
+        # resolves ^ ranges at CI time.
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Typecheck
+        working-directory: ${{ matrix.package }}
+        run: npx tsc --noEmit
+
+      - name: Build (if package declares one)
+        working-directory: ${{ matrix.package }}
+        run: |
+          if node -e "p=require('./package.json');process.exit(p.scripts&&p.scripts.build?0:1)"; then
+            npm run build
+          else
+            echo "No build script — skipping"
+          fi
+
+  # ── Job 3: Docker build verification (arm64 cross) ──
   docker-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4.2.2
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Set up QEMU (for arm64 cross-build)
-        uses: docker/setup-qemu-action@v3
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3.2.0
         with:
           platforms: arm64
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3.7.1
+
       - name: Build Docker image
-        run: |
-          docker buildx build \
-            --platform linux/arm64 \
-            --file docker/Dockerfile.ros2 \
-            --tag rosclaw-mujoco:ci-test \
-            docker/
+        uses: docker/build-push-action@v6.10.0
+        with:
+          # Context is the repo root (not docker/) because the Dockerfile
+          # does `COPY requirements-ros2.txt` which lives at the root.
+          context: .
+          file: docker/Dockerfile.ros2
+          platforms: linux/arm64
+          push: false
+          tags: rosclaw-mujoco:ci-test
+          # Buildx GitHub cache — without this the full ros:humble base
+          # rebuilds from scratch every run under QEMU (~10+ min).
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

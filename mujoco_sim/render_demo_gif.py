@@ -6,7 +6,9 @@ import mujoco
 from PIL import Image
 
 from state_extractor import SegwayStateExtractor
-from lqr_controller import SegwayLQR
+# NOTE: this renderer intentionally runs uncontrolled physics to show the
+# open-loop pendulum falling. The LQR controller is not wired in here; see
+# segway_sim.py for the controlled version.
 
 MODEL_PATH = "segway.xml"
 SIM_DT = 0.002
@@ -25,7 +27,6 @@ def main():
     data = mujoco.MjData(model)
 
     ext = SegwayStateExtractor(model)
-    lqr = SegwayLQR(torque_limit=TORQUE_LIMIT)
 
     L_act = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "L_wheel_torque")
     R_act = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "R_wheel_torque")

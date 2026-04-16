@@ -1,4 +1,10 @@
-# Development / CI dependencies
-pytest>=7.4.0
-ruff>=0.4.0
-google-generativeai>=0.5.0
+# Development / CI-only dependencies
+#
+# Note: `google-genai` is NOT listed here — it is a runtime dependency of the
+# gemini_nlp ROS2 service (imported via `from google import genai`). It lives
+# in requirements-ros2.txt and in docker/Dockerfile.ros2 so the Docker image
+# install is deterministic. The old `google-generativeai` SDK was removed in
+# commit 7776481 — do not add it back.
+
+pytest==8.3.3
+ruff==0.6.9

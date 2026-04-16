@@ -1,0 +1,48 @@
+version: 2
+updates:
+  # Python runtime (macOS sim side)
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python"]
+
+  # Python runtime inside the ROS2 Docker image
+  - package-ecosystem: pip
+    directory: /
+    # Note: dependabot currently scans the repo root for all requirements*.txt
+    # so requirements-ros2.txt is picked up by the entry above. This duplicate
+    # entry is left disabled (directory intentionally non-existent) until
+    # dependabot gains per-file targeting. See:
+    # https://github.com/dependabot/dependabot-core/issues/2178
+    # (Remove this block when the issue closes.)
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0  # disabled
+
+  # TypeScript packages
+  - package-ecosystem: npm
+    directory: /extensions/openclaw-plugin
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "typescript"]
+  - package-ecosystem: npm
+    directory: /packages/rosbridge-client
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "typescript"]
+
+  # Docker base image (ros:humble-ros-base)
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: monthly
+    labels: ["dependencies", "docker"]
+
+  # GitHub Actions — bumps @vX tags and (once SHA-pinned) commit SHAs
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: ["dependencies", "ci"]
