@@ -1,13 +1,22 @@
+# Base image: ros:humble-ros-base — pinned to a specific digest is preferred
+# but the tag is kept here for readability; bump via dependabot (docker eco).
 FROM ros:humble-ros-base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Install ROS2 rosbridge + Python pip. apt lists are scrubbed at the end.
 RUN apt-get update -qq && \
     apt-get install -y -qq --no-install-recommends \
       ros-humble-rosbridge-suite \
       python3-pip && \
-    pip3 install --no-cache-dir numpy scipy google-genai && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+# Pinned runtime deps — single source of truth is requirements-ros2.txt at
+# the repo root. Keep this COPY + install in its own layer so dep changes
+# don't re-trigger the slower apt layer.
+COPY requirements-ros2.txt /tmp/requirements-ros2.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements-ros2.txt && \
+    rm /tmp/requirements-ros2.txt
 
 WORKDIR /root/ros2_ws

@@ -1,6 +1,13 @@
-# macOS dependencies
-websocket-client>=1.6.0
-numpy>=1.24.0
-scipy>=1.11.0
-mujoco>=3.0.0
-matplotlib>=3.7.0
+# macOS-side runtime dependencies (MuJoCo sim + rosbridge WebSocket client)
+#
+# Pinned to exact versions for reproducibility. When upgrading:
+#   1. Bump one package at a time.
+#   2. Run `pytest tests/ -v` locally.
+#   3. Update requirements-dev.txt in the same PR if needed.
+# Dependabot (.github/dependabot.yml) opens weekly PRs that bump these.
+
+websocket-client==1.8.0
+numpy==1.26.4
+scipy==1.13.1
+mujoco==3.2.3
+matplotlib==3.9.2

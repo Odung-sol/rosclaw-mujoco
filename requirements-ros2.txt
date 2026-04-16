@@ -1,0 +1,7 @@
+# Runtime dependencies installed INSIDE the ROS2 Docker image.
+# Source of truth — docker/Dockerfile.ros2 must `pip install -r` this file
+# so the image build is reproducible and dependabot can track versions.
+
+numpy==1.26.4
+scipy==1.13.1
+google-genai==1.73.1
