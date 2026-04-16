@@ -75,8 +75,10 @@ jobs:
         uses: actions/setup-node@v4.1.0
         with:
           node-version: "20"
-          cache: npm
-          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+          # npm cache is disabled until package-lock.json files are committed.
+          # setup-node's `cache: npm` hard-fails if the path doesn't resolve,
+          # so we re-enable it only after a lockfile lands. The install step
+          # below already falls back to `npm install` when there is no lock.
 
       - name: Install dependencies
         working-directory: ${{ matrix.package }}
@@ -121,7 +123,9 @@ jobs:
       - name: Build Docker image
         uses: docker/build-push-action@v6.10.0
         with:
-          context: docker/
+          # Context is the repo root (not docker/) because the Dockerfile
+          # does `COPY requirements-ros2.txt` which lives at the root.
+          context: .
           file: docker/Dockerfile.ros2
           platforms: linux/arm64
           push: false
