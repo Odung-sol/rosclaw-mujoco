@@ -9,11 +9,14 @@ Uses two WebSocket connections:
 """
 
 import json
+import os
 import time
 import threading
 import websocket  # pip install websocket-client
 
-ROSBRIDGE_URL = "ws://127.0.0.1:9090"
+# Matches the env-var override pattern used by extensions/openclaw-plugin/src/index.ts.
+# Override with: ROSBRIDGE_URL=ws://host:port python -m mujoco_sim.segway_bridge
+ROSBRIDGE_URL = os.environ.get("ROSBRIDGE_URL", "ws://127.0.0.1:9090")
 STATE_TOPIC = "/segway/state"
 CMD_TOPIC = "/segway/cmd_torque"
 REF_TOPIC = "/segway/cmd_reference"
@@ -179,7 +182,7 @@ if __name__ == "__main__":
                 break
             time.sleep(dt)
         else:
-            print(f"\n[OK] Balanced for 30s!")
+            print("\n[OK] Balanced for 30s!")
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
