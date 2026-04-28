@@ -20,6 +20,7 @@ ROSBRIDGE_URL = os.environ.get("ROSBRIDGE_URL", "ws://127.0.0.1:9090")
 STATE_TOPIC = "/segway/state"
 CMD_TOPIC = "/segway/cmd_torque"
 REF_TOPIC = "/segway/cmd_reference"
+DISTURBANCE_TOPIC = "/segway/disturbance"
 MSG_TYPE = "std_msgs/msg/String"
 
 
@@ -32,6 +33,10 @@ class SegwayROSBridge:
         self.ws_sub = None   # for receiving torque
         self.latest_torque = 0.0
         self.latest_reference = {"command": "none"}
+        # Latest disturbance command from /segway/disturbance, or None.
+        # Consumers (e.g. segway_sim.py) call pop_disturbance() to take it.
+        # Schema: {"force": float (N), "duration": float (s)}.
+        self.latest_disturbance = None
         self.connected = False
         self._lock = threading.Lock()
 
@@ -72,6 +77,13 @@ class SegwayROSBridge:
             "op": "subscribe", "topic": REF_TOPIC, "type": MSG_TYPE,
             "throttle_rate": 0,
         }))
+        # Subscribe to external disturbance commands (sub connection).
+        # Used by Issue #4 acceptance test — operator pushes a kick payload
+        # and segway_sim.py applies it via apply_disturbance().
+        self.ws_sub.send(json.dumps({
+            "op": "subscribe", "topic": DISTURBANCE_TOPIC, "type": MSG_TYPE,
+            "throttle_rate": 0,
+        }))
         time.sleep(2.0)
         print("[Bridge] Topics ready.")
 
@@ -93,6 +105,12 @@ class SegwayROSBridge:
                         data = json.loads(msg["msg"]["data"])
                         with self._lock:
                             self.latest_reference = data
+
+                    elif topic == DISTURBANCE_TOPIC:
+                        parsed = self._parse_disturbance_payload(msg["msg"]["data"])
+                        if parsed is not None:
+                            with self._lock:
+                                self.latest_disturbance = parsed
 
                 except websocket.WebSocketTimeoutException:
                     continue
@@ -133,6 +151,53 @@ class SegwayROSBridge:
         """Get latest reference command from OpenClaw."""
         with self._lock:
             return self.latest_reference.copy()
+
+    @staticmethod
+    def _parse_disturbance_payload(raw_data):
+        """Validate a /segway/disturbance payload string.
+
+        Returns ``{"force": float, "duration": float}`` on a well-formed
+        payload, or ``None`` if anything is wrong (bad JSON, missing field,
+        non-finite, non-positive duration). Mirrors the defensive
+        validation in lqr_controller_node._on_reference — bad payloads are
+        silently dropped, never raised, so a malformed publish from a
+        peer can't take the bridge thread down.
+        """
+        try:
+            data = json.loads(raw_data)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        force = data.get("force")
+        duration = data.get("duration")
+        # Reject bools — they pass float() but aren't what callers mean.
+        if isinstance(force, bool) or isinstance(duration, bool):
+            return None
+        try:
+            f = float(force)
+            d = float(duration)
+        except (TypeError, ValueError):
+            return None
+        # NaN / inf / non-positive duration are rejected.
+        if not (f == f) or f in (float("inf"), float("-inf")):
+            return None
+        if not (d == d) or d <= 0.0 or d == float("inf"):
+            return None
+        return {"force": f, "duration": d}
+
+    def pop_disturbance(self):
+        """Take and clear the latest /segway/disturbance command.
+
+        Single-shot semantics: consumers call this once per sim tick; if a
+        payload is waiting, they get it back and the slot is cleared. If
+        nothing has arrived, returns None. This avoids accidentally
+        re-applying the same kick on every tick.
+        """
+        with self._lock:
+            d = self.latest_disturbance
+            self.latest_disturbance = None
+        return d
 
     def close(self):
         """Gracefully shut down both connections."""

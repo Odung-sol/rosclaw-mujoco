@@ -15,6 +15,13 @@ SIM_DT = 0.002
 TORQUE_LIMIT = 20.0
 UDP_STATE_PORT = 9091
 
+# External disturbance application point — the top of the body, expressed
+# in body-local coordinates. The body collision box (segway.xml) extends
+# from body-local z = -0.06 to z = +0.34, so 0.34 is the top face. Updating
+# the body geometry in MJCF without bumping this constant will silently
+# move the disturbance application point, so keep them in sync.
+BODY_TOP_LOCAL = (0.0, 0.0, 0.34)
+
 
 class SegwaySimulation:
     def __init__(self, use_ros2=False):
@@ -26,11 +33,17 @@ class SegwaySimulation:
 
         self.L_act = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, "L_wheel_torque")
         self.R_act = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, "R_wheel_torque")
+        self.body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "body")
 
         self.state_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
         self.failed = False
         self.log_data = []
+
+        # External disturbance hook (Issue #4). Set by apply_disturbance(),
+        # read in step()/step_ros2() before mj_step. Tuple of
+        # (force_x_N: float, end_time_s: float) or None.
+        self.pending_disturbance = None
 
         # ROS2 bridge mode
         self.use_ros2 = use_ros2
@@ -67,8 +80,76 @@ class SegwaySimulation:
 
         self.failed = False
         self.log_data = []
+        self.pending_disturbance = None
+        # qfrc_applied is the channel mj_applyFT writes to. Clear it on
+        # reset so a leftover impulse from the previous run can't leak in.
+        self.data.qfrc_applied[:] = 0.0
         self.ext.reset()
         mujoco.mj_forward(self.model, self.data)
+
+    # ── External disturbance API (Issue #4) ───────────────────────────────
+    def apply_disturbance(self, force_N, duration_s, point_local=BODY_TOP_LOCAL):
+        """Schedule a horizontal disturbance force at a point on the body.
+
+        Force is applied along the world +x axis (the segway's forward
+        direction when upright), at `point_local` expressed in the body's
+        local frame. Active until `duration_s` of *sim time* has elapsed,
+        then automatically clears.
+
+        Calling this while another disturbance is already active replaces
+        the previous one — the use case is "apply a kick", not "stack
+        kicks". Step into the test if you ever need overlapping pulses.
+
+        Raises ValueError on non-finite force_N or non-positive duration_s.
+        """
+        f = float(force_N)
+        d = float(duration_s)
+        if not np.isfinite(f):
+            raise ValueError(f"force_N must be finite, got {force_N!r}")
+        if not np.isfinite(d) or d <= 0.0:
+            raise ValueError(f"duration_s must be positive finite, got {duration_s!r}")
+        end_time = float(self.data.time) + d
+        self.pending_disturbance = {
+            "force_N": f,
+            "end_time": end_time,
+            "point_local": tuple(float(c) for c in point_local),
+        }
+
+    def _apply_pending_disturbance(self):
+        """If a disturbance is active for the current sim time, write its
+        force into qfrc_applied. Called by step()/step_ros2() once per tick.
+
+        Note: qfrc_applied accumulates over a step. We zero it here every
+        tick (whether or not a disturbance is active) so a one-shot kick
+        doesn't bleed into subsequent steps.
+        """
+        # Always clear last tick's contribution first.
+        self.data.qfrc_applied[:] = 0.0
+
+        d = self.pending_disturbance
+        if d is None:
+            return
+
+        if self.data.time >= d["end_time"]:
+            self.pending_disturbance = None
+            return
+
+        # Convert body-local application point to world coordinates for
+        # mj_applyFT. mj_local2Global handles the body-pose math correctly
+        # even when the body is tilted — important once theta is non-zero.
+        body_pos = self.data.xpos[self.body_id]      # shape (3,)
+        body_mat = self.data.xmat[self.body_id].reshape(3, 3)
+        offset_world = body_mat @ np.asarray(d["point_local"], dtype=np.float64)
+        point_world = body_pos + offset_world
+
+        force = np.array([d["force_N"], 0.0, 0.0], dtype=np.float64)
+        torque = np.zeros(3, dtype=np.float64)
+        mujoco.mj_applyFT(
+            self.model, self.data,
+            force, torque, point_world,
+            int(self.body_id),
+            self.data.qfrc_applied,
+        )
 
     def step(self):
         """One simulation step using local LQR."""
@@ -85,11 +166,23 @@ class SegwaySimulation:
         self.data.ctrl[self.L_act] = float(tL)
         self.data.ctrl[self.R_act] = float(tR)
 
+        self._apply_pending_disturbance()
         mujoco.mj_step(self.model, self.data)
         return state, tL, tR
 
     def step_ros2(self):
         """One simulation step using ROS2 LQR (via bridge)."""
+        # Drain the bridge's /segway/disturbance slot, if anything is
+        # waiting. pop_disturbance() returns None when empty so this is a
+        # no-op on most ticks.
+        if self.bridge is not None:
+            d = self.bridge.pop_disturbance()
+            if d is not None:
+                try:
+                    self.apply_disturbance(force_N=d["force"], duration_s=d["duration"])
+                except (ValueError, TypeError) as e:
+                    print(f"[Sim] Ignoring malformed disturbance: {e}")
+
         theta = self.ext.get_theta(self.data)
         theta_dot = self.ext.get_theta_dot(self.data)
         x = float(self.data.qpos[0])
@@ -118,6 +211,7 @@ class SegwaySimulation:
         self.data.ctrl[self.L_act] = torque
         self.data.ctrl[self.R_act] = torque
 
+        self._apply_pending_disturbance()
         mujoco.mj_step(self.model, self.data)
         state = np.array([theta, theta_dot, x, x_dot])
         return state, torque, torque
