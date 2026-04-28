@@ -101,6 +101,7 @@ Required env (see `.env.example`): `GOOGLE_API_KEY`. Optional:
 | Intent | Touch these |
 |---|---|
 | Add a new NL command (e.g. "spin_left") | `gemini_nlp_node.py` system prompt + `VALID_COMMANDS` + `lqr_controller_node.py:_on_reference` + a test in `test_lqr_controller_node.py` |
+| Add a new sim disturbance / external force | `segway_sim.py:apply_disturbance()` already covers single-axis push at body top; for new shapes, mirror the `pending_disturbance` state machine and add a test in `test_disturbance_recovery.py`. Bridge channel is `/segway/disturbance` (`{"force": float, "duration": float}`). |
 | Tune LQR aggressiveness | `params.yaml` `Q_diag` / `R_val` — NOT the node defaults (the defaults are the safety net for missing params file) |
 | Change physics | all three files in §4 Never #4 — same commit |
 | Add a ROS2 node | new file under `ros2_ws/src/segway_controller/` + new service in `docker-compose.yml` + update §2 Repo map + update §4 if service count changes |
@@ -127,6 +128,14 @@ Required env (see `.env.example`): `GOOGLE_API_KEY`. Optional:
 - **rosbridge bound to `127.0.0.1`.** See §4 Never #2. (2026-04-16)
 - **Physics params source of truth = MJCF (`segway.xml`).** Node defaults
   and `params.yaml` must match. (2026-04-16)
+- **External disturbance API (Issue #4).** `SegwaySimulation.apply_disturbance(
+  force_N, duration_s)` writes a one-shot horizontal force at body-local
+  point `BODY_TOP_LOCAL = (0, 0, 0.34)` via `mj_applyFT` into
+  `qfrc_applied`. The point matches the segway.xml collision-box top —
+  bumping the box geometry without bumping `BODY_TOP_LOCAL` silently moves
+  the application point. Bridge channel is `/segway/disturbance` with the
+  same JSON-in-String wire format as the rest of the topics. Acceptance:
+  1 N × 0.3 s → peak |θ| < 5°, recovers to <0.5° within 2 s. (2026-04-29)
 
 ## 7. Verification before merging
 
