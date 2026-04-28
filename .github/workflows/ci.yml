@@ -75,21 +75,12 @@ jobs:
         uses: actions/setup-node@v4.1.0
         with:
           node-version: "20"
-          # npm cache is disabled until package-lock.json files are committed.
-          # setup-node's `cache: npm` hard-fails if the path doesn't resolve,
-          # so we re-enable it only after a lockfile lands. The install step
-          # below already falls back to `npm install` when there is no lock.
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
 
       - name: Install dependencies
         working-directory: ${{ matrix.package }}
-        # `npm ci` once a lockfile is committed; until then `npm install`
-        # resolves ^ ranges at CI time.
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install --no-audit --no-fund
-          fi
+        run: npm ci
 
       - name: Typecheck
         working-directory: ${{ matrix.package }}

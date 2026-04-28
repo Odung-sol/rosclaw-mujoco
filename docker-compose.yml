@@ -1,14 +1,15 @@
 # rosclaw-mujoco Docker Compose
 # 기존 rosbridge 설정 유지 + LQR 노드 + ROSClaw discovery 추가
-
-version: "3.8"
+# (Compose v2 dropped the top-level `version` key — leaving it caused a warning.)
 
 services:
   # ── ROS2 + rosbridge WebSocket (기존) ──
   ros2_bridge:
     build:
-      context: ./docker
-      dockerfile: Dockerfile.ros2
+      # Context is the repo root (not ./docker) because the Dockerfile does
+      # `COPY requirements-ros2.txt` which lives at the repo root.
+      context: .
+      dockerfile: docker/Dockerfile.ros2
     platform: linux/arm64
     container_name: segway_ros2
     environment:
@@ -37,8 +38,10 @@ services:
   # ── LQR Controller ROS2 Node (NEW) ──
   lqr_controller:
     build:
-      context: ./docker
-      dockerfile: Dockerfile.ros2
+      # Context is the repo root (not ./docker) because the Dockerfile does
+      # `COPY requirements-ros2.txt` which lives at the repo root.
+      context: .
+      dockerfile: docker/Dockerfile.ros2
     platform: linux/arm64
     container_name: segway_lqr
     depends_on:
@@ -58,8 +61,10 @@ services:
   # ── Gemini NLP Node (NEW — Natural Language Control) ──
   gemini_nlp:
     build:
-      context: ./docker
-      dockerfile: Dockerfile.ros2
+      # Context is the repo root (not ./docker) because the Dockerfile does
+      # `COPY requirements-ros2.txt` which lives at the repo root.
+      context: .
+      dockerfile: docker/Dockerfile.ros2
     platform: linux/arm64
     container_name: segway_nlp
     depends_on:
@@ -79,8 +84,10 @@ services:
   # ── ROSClaw Discovery Node (NEW — for OpenClaw) ──
   rosclaw_discovery:
     build:
-      context: ./docker
-      dockerfile: Dockerfile.ros2
+      # Context is the repo root (not ./docker) because the Dockerfile does
+      # `COPY requirements-ros2.txt` which lives at the repo root.
+      context: .
+      dockerfile: docker/Dockerfile.ros2
     platform: linux/arm64
     container_name: segway_discovery
     depends_on:
