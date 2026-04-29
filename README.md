@@ -14,6 +14,12 @@ A two-wheeled inverted pendulum (Segway) balanced by an LQR controller in MuJoCo
   <em>Three escalating pushes, three recoveries. The LQR controller catches the segway after each kick.</em>
 </p>
 
+> **Implementer's guide:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the
+> full topic catalogue, component map, and control / NL / disturbance flow
+> diagrams. [`CLAUDE.md`](CLAUDE.md) lists the load-bearing invariants you
+> shouldn't break. [`docs/SECURITY.md`](docs/SECURITY.md) covers the threat
+> model and key-rotation runbook.
+
 ## Architecture
 
 ```
@@ -63,13 +69,14 @@ This project demonstrates an LLM acting as a **high-level planner** for a real-t
 
 ## Features
 
-- **LQR Balancing** — Optimal control based on a linearized inverted pendulum model (CARE solver with rollback)
-- **Gemini NLP Node** — Natural language to JSON command conversion with rate limiting and schema validation
-- **MuJoCo Physics** — Full rigid-body simulation with real STL meshes
+- **LQR Balancing** — Optimal control based on a linearized inverted pendulum model (CARE solver with hard-coded MATLAB K fallback)
+- **Position Regulation** — The controller returns the segway to its starting position after a disturbance, not just upright
+- **External Disturbance API** — `SegwaySimulation.apply_disturbance(force_N, duration_s)` injects an impulse at the body's top point; or push the same payload over the `/segway/disturbance` ROS2 topic. Acceptance bound: 1 N × 0.3 s recovers to within 0.5° / 0.1 m in 2 s
+- **Gemini NLP Node** — Natural language to JSON command conversion via `google-genai`, with rate limiting and schema validation. **Not in the control loop** — runs at intent-translation latency
+- **MuJoCo Physics** — Full rigid-body simulation with real STL meshes (linux/arm64 Docker, macOS-native MuJoCo viewer)
 - **ROSClaw + OpenClaw** — AI agent interface for natural language control (move, stop, tune gains, etc.)
-- **CI/CD Pipeline** — GitHub Actions: ruff lint + 38 unit tests + Docker arm64 build verification
-- **WebSocket Bridge** — Stable macOS-to-Docker ROS2 communication
-- **Docker First** — Native Apple Silicon (M-series) support
+- **CI/CD Pipeline** — GitHub Actions: ruff lint + **62 unit tests** + TypeScript typecheck + Docker arm64 build (Buildx GHA-cached)
+- **WebSocket Bridge** — Stable macOS-to-Docker ROS2 communication, dual-connection (publish + subscribe) for race-free advertise / subscribe
 
 ## Project Structure
 
@@ -77,35 +84,48 @@ This project demonstrates an LLM acting as a **high-level planner** for a real-t
 rosclaw-mujoco/
 ├── docker-compose.yml               # ROS2 stack (4 services)
 ├── docker/
-│   └── Dockerfile.ros2              # ros:humble + rosbridge + scipy
+│   └── Dockerfile.ros2              # ros:humble + rosbridge + pinned pip deps
+│
+├── docs/
+│   ├── ARCHITECTURE.md              # Full topic catalogue + flow diagrams
+│   ├── SECURITY.md                  # Threat model + key rotation runbook
+│   └── demo.gif                     # README banner
 │
 ├── mujoco_sim/                      # MuJoCo simulation (macOS native)
-│   ├── segway_sim.py                # Main simulator with viewer
+│   ├── segway_sim.py                # Main simulator with viewer + apply_disturbance API
 │   ├── segway.xml                   # MJCF model definition
 │   ├── lqr_controller.py            # Standalone LQR controller
 │   ├── state_extractor.py           # Quaternion-based state extraction
-│   ├── segway_bridge.py             # ROS2 WebSocket bridge client
+│   ├── segway_bridge.py             # ROS2 WebSocket bridge client (dual connection)
 │   ├── render_demo_gif.py           # Offscreen rendering for demo GIF
 │   ├── plot_client.py               # Real-time plotting
 │   └── meshes/                      # STL mesh files
 │
 ├── ros2_ws/src/segway_controller/   # ROS2 nodes
-│   ├── lqr_controller_node.py       # LQR control node
+│   ├── lqr_controller_node.py       # LQR control node (CARE + MATLAB fallback)
 │   ├── gemini_nlp_node.py           # Gemini NLP parsing node
 │   ├── nlp_cli_node.py              # Terminal input publisher
 │   ├── discovery_node.py            # ROSClaw auto-discovery
 │   └── params.yaml                  # Physical params + LQR weights
 │
-├── tests/                           # Unit tests (38 total)
+├── tests/                           # pytest suite (62 total)
 │   ├── conftest.py                  # ROS2/Gemini mock fixtures
 │   ├── test_gemini_nlp_node.py      # NLP node tests (21)
-│   └── test_lqr_controller_node.py  # LQR node tests (17)
+│   ├── test_lqr_controller_node.py  # LQR node tests (17)
+│   ├── test_disturbance_recovery.py # Disturbance API + acceptance (6)
+│   └── test_bridge_disturbance.py   # Bridge JSON validation (18)
 │
 ├── extensions/openclaw-plugin/      # OpenClaw plugin (TypeScript)
 │   └── src/index.ts                 # 7 tools (move, stop, tune, etc.)
 │
-└── packages/rosbridge-client/       # rosbridge WebSocket client lib
-    └── src/index.ts
+├── packages/rosbridge-client/       # rosbridge WebSocket client lib
+│   └── src/index.ts
+│
+├── requirements.txt                 # macOS sim deps (pinned ==)
+├── requirements-dev.txt             # pytest + ruff (pinned ==)
+├── requirements-ros2.txt            # Docker runtime deps (pinned ==)
+├── .env.example                     # Canonical env-var list
+└── CLAUDE.md                        # Load-bearing invariants for AI agents
 ```
 
 ## Installation
@@ -113,11 +133,13 @@ rosclaw-mujoco/
 ### Prerequisites (macOS)
 
 ```bash
-# Python 3.10+
-brew install python3
+# Python 3.10–3.12 (scipy doesn't ship wheels for 3.13+ yet, so 3.14 will fail
+# at install time). Pinned in pyproject.toml; verify with `python3 --version`.
+brew install python@3.11        # or python@3.10 / python@3.12
 
-# MuJoCo
-pip install mujoco numpy scipy
+# Recommended: a project-local venv so MuJoCo + scipy live next to the repo.
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
 
 # Docker Desktop (Apple Silicon)
 # https://www.docker.com/products/docker-desktop
@@ -126,12 +148,16 @@ pip install mujoco numpy scipy
 ### Docker ROS2 Stack
 
 ```bash
-# First run (builds images, takes 3-5 min)
+# Copy the env example and fill in your Gemini API key
+cp .env.example .env
+# Edit .env to set GOOGLE_API_KEY=<your key>
+
+# First run (builds images, takes 3–5 min on first arm64 build, < 1 min after)
 docker compose up -d
 
-# Verify all services are up
+# Verify all four services are up
 docker compose ps
-# Expected: segway_ros2, segway_lqr, segway_discovery, segway_nlp
+# Expected: segway_ros2 (healthy), segway_lqr, segway_discovery, segway_nlp
 ```
 
 ## Quick Start
@@ -195,10 +221,13 @@ pnpm install && pnpm build
 |---|---|---|---|
 | `/segway/state` | MuJoCo → ROS2 | 100 | Robot state (theta, x, velocity) |
 | `/segway/cmd_torque` | ROS2 → MuJoCo | 100 | Wheel torque commands |
-| `/segway/nlp_input` | User → Gemini NLP | on-demand | Natural language text input |
 | `/segway/cmd_reference` | NLP / OpenClaw → LQR | on-demand | JSON control commands |
+| `/segway/disturbance` | Operator → MuJoCo | on-demand | External impulse for testing recovery |
+| `/segway/nlp_input` | User → Gemini NLP | on-demand | Natural language text input |
 | `/segway/controller/status` | ROS2 → All | 10 | Controller status |
 | `/rosclaw/capabilities` | Discovery → All | 1 | Robot capability report |
+
+All topics are `std_msgs/String` carrying UTF-8 JSON. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §3 for full payload schemas.
 
 ### State Message Format
 
@@ -235,6 +264,33 @@ pnpm install && pnpm build
 "emergency stop"               → {"command": "disable"}
 ```
 
+## Disturbance Recovery
+
+Push an impulse at the body's top point and watch the LQR recover.
+
+### From a Python script (or test)
+
+```python
+sim = SegwaySimulation(use_ros2=False)
+sim.reset(pitch_deg=0.0)
+sim.apply_disturbance(force_N=1.0, duration_s=0.3)   # 1 N forward kick × 0.3 s
+for _ in range(2500):
+    sim.step()
+# Expected: peak |theta| < 5 deg, |theta| < 0.5 deg at +2 s, x_drift < 0.1 m
+```
+
+### Over the ROS2 wire
+
+```bash
+docker compose exec ros2_bridge bash -c \
+  'ros2 topic pub --once /segway/disturbance std_msgs/msg/String \
+   "{data: \"{\\\"force\\\": 1.0, \\\"duration\\\": 0.3}\"}"'
+```
+
+The bridge's listener validates the payload (rejects NaN / Inf / non-positive duration) and forwards it into `apply_disturbance()` on the simulator.
+
+The README demo GIF runs three escalating kicks (30 N → 50 N → −80 N) with the LQR active throughout — see `mujoco_sim/render_demo_gif.py` to reproduce.
+
 ## Testing
 
 ```bash
@@ -247,8 +303,9 @@ ruff check .
 ```
 
 CI runs automatically on every push and PR:
-- **lint-and-test** — ruff + pytest (38 tests)
-- **docker-build** — arm64 image build verification
+- **lint-and-test** — ruff + pytest (62 tests)
+- **typescript** — `tsc --noEmit` matrix over `extensions/openclaw-plugin` and `packages/rosbridge-client`
+- **docker-build** — linux/arm64 image build verification with Buildx GHA cache
 
 ## LQR Gain Tuning
 
