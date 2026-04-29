@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Render the README demo GIF.
 
-Showcases the LQR controller's balance + disturbance rejection by running
-the *real* control loop (`SegwaySimulation.step`) and injecting two
-external impulses at scheduled times via `apply_disturbance`. Side-view
-camera so pitch is clearly visible. Text overlays annotate what's
-happening at each moment.
+Showcases the LQR's full balance + position regulation by running the real
+control loop (`SegwaySimulation.step`) — LQR is on the whole time — and
+injecting three escalating impulses via `apply_disturbance`. Each kick tips
+the body 10°–30° before the controller drives it back upright AND back to
+the starting position. Side-view camera; text overlays annotate each phase.
 
 Run from `mujoco_sim/`:
     .venv/bin/python render_demo_gif.py
@@ -28,62 +28,43 @@ from segway_sim import SegwaySimulation, SIM_DT  # noqa: E402
 
 
 # ── Render config ─────────────────────────────────────────────────────────
-# 400×300 + 20 fps + 32-color palette = ~1.5 MB. Bigger settings drift past
+# 400×300 + 20 fps + 32-color palette = ~1.3 MB. Bigger settings push past
 # 3 MB which is too heavy to embed at the top of README.md.
 WIDTH, HEIGHT = 400, 300
 FPS = 20
 DURATION_S = 11.0
 RENDER_EVERY = max(1, int(round(1.0 / (FPS * SIM_DT))))   # sim steps per frame
 OUTPUT_PATH = os.path.join("..", "docs", "demo.gif")
-# Start perfectly upright. The narrative is: "operator keeps trying to knock
-# it over, the LQR keeps catching it" — so the segway has to begin in a
-# stable, hands-off posture before the first kick.
-INITIAL_PITCH_DEG = 0.0
+INITIAL_PITCH_DEG = 0.0   # start perfectly upright, hands-off, motionless
 
 
 # ── Disturbance schedule ──────────────────────────────────────────────────
-# Each entry: (start_s, force_N, force_duration_s, lqr_off_extra_s, label).
+# (start_s, force_N, force_duration_s, label)
 #
-# `lqr_off_extra_s` is the *extra* time the LQR stays disabled after the
-# external force ends — the segway keeps falling under gravity for that
-# window, so the body visibly tips before the controller is allowed to
-# react. This is what creates the "uh-oh, then save" moment.
+# LQR is on the *entire* run — no off-window trick. The kicks are strong
+# enough that they overpower the controller for the 0.3 s force window
+# (peak θ ≈ 10°/20°/27°), but the position-regulating LQR drives the
+# segway back to the starting position within ~1 s. Forces tuned to keep
+# the segway within ±1 m of origin so the camera doesn't need to track.
 #
-# The forces escalate to tell a story: weak push → medium → strong reverse,
-# each successively closer to the recovery limit. Empirically tuned to
-# produce ~20°, ~22°, ~30° peak tilts; bigger numbers in the same
-# off-window send the body past inversion.
+# 80 N is roughly the recovery limit with this K — bigger forces invert
+# the body before the wheels can catch it.
 DISTURBANCES = [
-    (1.0,  40.0, 0.3, 0.2, "weak push →"),
-    (4.0,  60.0, 0.3, 0.2, "medium push →"),
-    (7.5, -80.0, 0.3, 0.2, "← STRONG push"),
+    (1.5,  30.0, 0.3, "weak push →"),
+    (4.5,  50.0, 0.3, "medium push →"),
+    (7.5, -80.0, 0.3, "← STRONG push"),
 ]
 
 
-# ── Camera (side view; tracks the body's x-position so the segway never
-#    drifts out of frame after a kick — kicks generate >0.5 m of drift even
-#    though the LQR holds θ near 0.) ────────────────────────────────────
+# ── Camera (fixed side view; segway returns to origin so no tracking) ─────
 def _make_camera():
     cam = mujoco.MjvCamera()
     cam.type = mujoco.mjtCamera.mjCAMERA_FREE
-    cam.distance = 3.2          # pulled back so a few metres of drift fit
+    cam.distance = 2.5
     cam.azimuth = 100
     cam.elevation = -12
     cam.lookat[:] = [0.0, 0.0, 0.18]
     return cam
-
-
-def _update_camera(cam, sim):
-    """Track the segway's x-position. The kicks send it 10+ m off origin;
-    if the camera can't keep up, half the GIF is the segway in the corner.
-
-    Single proportional gain (0.25 per frame at 25 fps) — plenty of catch-up
-    speed to keep the segway near the frame centre even at peak velocity.
-    The floor pattern shifts a lot as a side-effect, which inflates GIF
-    size; that's offset by lower color count + dimensions in the encoder.
-    """
-    target_x = float(sim.data.qpos[0])
-    cam.lookat[0] += 0.25 * (target_x - cam.lookat[0])
 
 
 # ── Font selection (graceful fallback if no TTF found on the host) ────────
@@ -104,7 +85,7 @@ def _load_font(size=18):
 
 
 def _draw_overlay(img, t, theta_deg, x_pos, label, kick_active):
-    """Composite timestamp + state + (optional) kick label onto a frame."""
+    """Composite timestamp + state + (optional) phase label onto a frame."""
     img = img.convert("RGBA")
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -115,7 +96,7 @@ def _draw_overlay(img, t, theta_deg, x_pos, label, kick_active):
     draw.rectangle([(0, 0), (img.size[0], 24)], fill=(0, 0, 0, 140))
     draw.text((8, 4), info, fill=(255, 255, 255, 255), font=font_small)
 
-    # Centered banner
+    # Bottom centred banner
     if label:
         font_big = _load_font(22)
         bbox = draw.textbbox((0, 0), label, font=font_big)
@@ -135,53 +116,21 @@ def _draw_overlay(img, t, theta_deg, x_pos, label, kick_active):
 
 
 def _current_phase(t):
-    """Return (label, kick_banner_active, lqr_off) for the given sim time.
+    """Return (label, kick_banner_active) for the given sim time.
 
-    Phases:
-      - kick window:   external force is on, LQR is off, banner shows the
-                       kick label (red).
-      - falling delay: force has ended but LQR still off; segway tips
-                       under gravity. Banner stays red.
-      - recovering:    LQR back on, fighting the residual tilt. Banner
-                       turns calm grey.
-      - balanced:      between scenarios.
+    Three phases per disturbance:
+      - kick window:   the force is being applied; banner shows the kick
+                       label in red.
+      - recovering:    1 s after the force ends; banner shows
+                       "LQR recovering" in calm grey.
+      - balanced:      anything else.
     """
-    for start, _, dur, off_extra, kick_label in DISTURBANCES:
-        kick_end = start + dur
-        lqr_on_at = kick_end + off_extra
-        if start <= t < kick_end:
-            return kick_label, True, True
-        if kick_end <= t < lqr_on_at:
-            return kick_label + "  (falling…)", True, True
-        if lqr_on_at <= t < lqr_on_at + 1.2:
-            return "LQR catches it", False, False
-    return "balanced", False, False
-
-
-def _demo_step(sim, lqr_off):
-    """Demo-only step that bypasses the |θ| > 30° fail latch and (optionally)
-    suppresses wheel torque so the body visibly tips.
-
-    The production `SegwaySimulation.step()` flips `failed=True` and zeros
-    the torques once theta exceeds 30° — a safety latch so unit tests can
-    detect a runaway. For a demo we want the controller to keep trying.
-
-    `lqr_off=True` zeros the wheel torque for this tick. The render loop
-    holds it true during the kick window AND for an extra `lqr_off_extra_s`
-    after the force ends; the body falls under gravity in that delay,
-    producing the "uh-oh" moment. Once the delay expires, lqr_off=False
-    and the controller catches it.
-    """
-    state = sim.ext.get_state(sim.data)
-    if lqr_off:
-        tL, tR = 0.0, 0.0
-    else:
-        tL, tR = sim.lqr.compute_torque(state)
-    sim.data.ctrl[sim.L_act] = float(tL)
-    sim.data.ctrl[sim.R_act] = float(tR)
-    sim._apply_pending_disturbance()
-    mujoco.mj_step(sim.model, sim.data)
-    return state, tL, tR
+    for start, _, dur, kick_label in DISTURBANCES:
+        if start <= t < start + dur:
+            return kick_label, True
+        if start + dur <= t < start + dur + 1.2:
+            return "LQR recovering", False
+    return "balanced", False
 
 
 def main():
@@ -202,28 +151,23 @@ def main():
         t = sim.data.time
 
         # Trigger any disturbance whose scheduled time has arrived.
-        for k, (start, force, duration, _, _) in enumerate(DISTURBANCES):
+        for k, (start, force, duration, _) in enumerate(DISTURBANCES):
             if not fired[k] and t >= start:
                 sim.apply_disturbance(force_N=force, duration_s=duration)
                 fired[k] = True
 
-        # LQR is OFF during the kick AND the falling-delay window after it.
-        lqr_off = any(
-            start <= t < start + duration + off_extra
-            for start, _, duration, off_extra, _ in DISTURBANCES
-        )
-        _demo_step(sim, lqr_off=lqr_off)
+        # Plain `sim.step()` — LQR is on, position regulation included.
+        sim.step()
 
         if i % RENDER_EVERY == 0:
-            _update_camera(cam, sim)  # smooth-tracks x so a kick doesn't slide segway off-frame
             renderer.update_scene(sim.data, camera=cam)
             pixels = renderer.render()
             frame = Image.fromarray(pixels)
 
             theta_deg = float(np.degrees(sim.ext.get_theta(sim.data)))
             x_pos = float(sim.data.qpos[0])
-            label, banner_active, _ = _current_phase(t)
-            frames.append(_draw_overlay(frame, t, theta_deg, x_pos, label, banner_active))
+            label, kick_active = _current_phase(t)
+            frames.append(_draw_overlay(frame, t, theta_deg, x_pos, label, kick_active))
 
     sim.close()
 

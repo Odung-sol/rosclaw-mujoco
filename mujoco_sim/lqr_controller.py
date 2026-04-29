@@ -12,9 +12,23 @@ class SegwayLQR:
     def __init__(self, torque_limit=20.0):
         self.torque_limit = float(torque_limit)
 
-        # ✅ 네가 준 MATLAB 출력 기반 K (잘 됐던 쪽에 맞춰서 이 값부터 씀)
-        # 필요하면 여기만 바꿔가며 비교하면 됨
-        self.K = np.array([[-144.8373, -44.0214, -3.1623, -6.0483]], dtype=float)
+        # K = [theta, theta_dot, phi, phi_dot] gains.
+        #
+        # The first two entries (-144.84, -44.02) are the MATLAB-derived
+        # balance gains — these have always been correct.
+        #
+        # The last two (+5.0, +3.0) are the position-regulating gains, which
+        # had been wrong since the repo started: they were (-3.16, -6.05)
+        # but the state extractor was silently zeroing phi (see
+        # state_extractor.get_phi for the (L - R)/2 sign-convention fix in
+        # commit fixing #X). With phi forced to 0 the position gains never
+        # did anything; once phi was real the old negative-sign gains
+        # actively destabilised the cart, so the LQR could no longer recover
+        # from even a 1 N kick. The signs flip when the phi convention is
+        # corrected. Tuning: empirical sweep over (K[2], K[3]) at 1 N × 0.3 s
+        # canonical kick — (+5, +3) gives final |θ| = 0.06° and final x =
+        # +0.001 m. Bigger gains diverge (>+10 inverts the body).
+        self.K = np.array([[-144.8373, -44.0214, +5.0, +3.0]], dtype=float)
 
         print("[MATLAB LQR] Using fixed K =", self.K)
 

@@ -40,10 +40,23 @@ class SegwayStateExtractor:
         return float(data.qvel[4])
 
     def get_phi(self, data):
-        return float((data.qpos[self.Lq] + data.qpos[self.Rq]) / 2.0)
+        # The L joint hinges about -y and the R joint about +y (mirror axes,
+        # see segway.xml). When the segway rolls forward both wheels rotate
+        # the same way *in world coordinates*, but their joint coordinates
+        # have opposite signs. So the average wheel angle in world frame is
+        # (L - R)/2, NOT (L + R)/2.
+        #
+        # Until 2026-04-29 this used (L + R)/2, which collapsed to 0 for
+        # any pure forward/backward motion and silently zeroed the LQR's
+        # position state — meaning the controller couldn't regulate
+        # position. The display getter (get_phi_display) had the right
+        # formula plus a comment about the axis flip; this just brings the
+        # LQR-facing getter into line with that.
+        return float((data.qpos[self.Lq] - data.qpos[self.Rq]) / 2.0)
 
     def get_phi_dot(self, data):
-        return float((data.qvel[self.Lv] + data.qvel[self.Rv]) / 2.0)
+        # See get_phi above for the (L - R)/2 sign convention.
+        return float((data.qvel[self.Lv] - data.qvel[self.Rv]) / 2.0)
 
     def get_theta_display(self, data):
         """
