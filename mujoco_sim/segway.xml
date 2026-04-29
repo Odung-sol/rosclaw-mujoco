@@ -10,8 +10,13 @@
   </default>
   <asset>
     <mesh name="body_mesh" file="body.stl"/>
-    <mesh name="L_wheel_mesh" file="L_wheel.stl"/>
-    <mesh name="R_wheel_mesh" file="R_wheel.stl"/>
+    <!-- scale="1 0.2 1" thins the wheel visual along the axis of rotation
+         so the rendered disc edges don't dip below the floor when the
+         segway body pitches — at 28° tilt the residual visual penetration
+         is ~3 mm instead of ~14 mm. Width-along-axis is purely cosmetic
+         here; the rolling is governed by the sphere collision geom. -->
+    <mesh name="L_wheel_mesh" file="L_wheel.stl" scale="1 0.2 1"/>
+    <mesh name="R_wheel_mesh" file="R_wheel.stl" scale="1 0.2 1"/>
     <texture type="2d" name="grid" builtin="checker" rgb1="0.8 0.8 0.8" rgb2="0.3 0.3 0.3" width="512" height="512"/>
     <material name="grid_mat" texture="grid" texrepeat="8 8"/>
   </asset>
