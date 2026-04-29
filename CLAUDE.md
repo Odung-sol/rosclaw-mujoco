@@ -153,6 +153,11 @@ via `npx tsc --noEmit` in the `typescript` matrix job.
 ## 8. Pointers
 
 - README.md — user-facing setup + feature list
+- `docs/ARCHITECTURE.md` — full topic catalogue, component map, and
+  control / NL / disturbance flow diagrams. **Read after this file** for
+  any change that crosses process boundaries.
+- `docs/SECURITY.md` — threat model, port 9090 exposure rules, key
+  rotation runbook
 - `mujoco_sim/PROJECT_SUMMARY.md` — historical Korean design doc; parts
   are stale (pre-ROS2). Keep for derivations, don't treat as current.
 - `.env.example` — canonical env-var list
