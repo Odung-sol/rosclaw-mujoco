@@ -7,7 +7,11 @@
 A two-wheeled inverted pendulum (Segway) balanced by an LQR controller in MuJoCo, with a Gemini-powered NLP pipeline that converts natural language commands into robot control signals over ROS2.
 
 <p align="center">
-  <img src="docs/demo.gif" alt="Segway LQR Balancing Demo" width="480">
+  <img src="docs/demo.gif" alt="Segway LQR rejecting three escalating disturbances" width="480">
+</p>
+
+<p align="center">
+  <em>Three escalating pushes, three recoveries. The LQR controller catches the segway after each kick.</em>
 </p>
 
 ## Architecture

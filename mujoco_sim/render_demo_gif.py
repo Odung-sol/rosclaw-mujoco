@@ -1,103 +1,191 @@
 #!/usr/bin/env python3
-"""MuJoCo 오프스크린 렌더링 → demo.gif 생성 스크립트."""
+"""Render the README demo GIF.
+
+Showcases the LQR's full balance + position regulation by running the real
+control loop (`SegwaySimulation.step`) — LQR is on the whole time — and
+injecting three escalating impulses via `apply_disturbance`. Each kick tips
+the body 10°–30° before the controller drives it back upright AND back to
+the starting position. Side-view camera; text overlays annotate each phase.
+
+Run from `mujoco_sim/`:
+    .venv/bin/python render_demo_gif.py
+Output: ../docs/demo.gif
+"""
+
+import os
+import sys
 
 import numpy as np
 import mujoco
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
-from state_extractor import SegwayStateExtractor
-# NOTE: this renderer intentionally runs uncontrolled physics to show the
-# open-loop pendulum falling. The LQR controller is not wired in here; see
-# segway_sim.py for the controlled version.
+# Make this script work whether invoked from repo root or mujoco_sim/.
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+os.chdir(THIS_DIR)
+sys.path.insert(0, THIS_DIR)
 
-MODEL_PATH = "segway.xml"
-SIM_DT = 0.002
-TORQUE_LIMIT = 20.0
+from segway_sim import SegwaySimulation, SIM_DT  # noqa: E402
 
-# 렌더링 설정
-WIDTH, HEIGHT = 480, 360
-DURATION = 5.0           # 총 시뮬 시간 (초)
-FPS = 25                 # GIF 프레임 레이트
-RENDER_EVERY = int(1.0 / (FPS * SIM_DT))  # 몇 스텝마다 프레임 캡처
-OUTPUT_PATH = "../docs/demo.gif"
+
+# ── Render config ─────────────────────────────────────────────────────────
+# 400×300 + 20 fps + 32-color palette = ~1.3 MB. Bigger settings push past
+# 3 MB which is too heavy to embed at the top of README.md.
+WIDTH, HEIGHT = 400, 300
+FPS = 20
+DURATION_S = 11.0
+RENDER_EVERY = max(1, int(round(1.0 / (FPS * SIM_DT))))   # sim steps per frame
+OUTPUT_PATH = os.path.join("..", "docs", "demo.gif")
+INITIAL_PITCH_DEG = 0.0   # start perfectly upright, hands-off, motionless
+
+
+# ── Disturbance schedule ──────────────────────────────────────────────────
+# (start_s, force_N, force_duration_s, label)
+#
+# LQR is on the *entire* run — no off-window trick. The kicks are strong
+# enough that they overpower the controller for the 0.3 s force window
+# (peak θ ≈ 10°/20°/27°), but the position-regulating LQR drives the
+# segway back to the starting position within ~1 s. Forces tuned to keep
+# the segway within ±1 m of origin so the camera doesn't need to track.
+#
+# 80 N is roughly the recovery limit with this K — bigger forces invert
+# the body before the wheels can catch it.
+DISTURBANCES = [
+    (1.5,  30.0, 0.3, "weak push →"),
+    (4.5,  50.0, 0.3, "medium push →"),
+    (7.5, -80.0, 0.3, "← STRONG push"),
+]
+
+
+# ── Camera (fixed side view; segway returns to origin so no tracking) ─────
+def _make_camera():
+    cam = mujoco.MjvCamera()
+    cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+    cam.distance = 2.5
+    cam.azimuth = 100
+    cam.elevation = -12
+    cam.lookat[:] = [0.0, 0.0, 0.18]
+    return cam
+
+
+# ── Font selection (graceful fallback if no TTF found on the host) ────────
+def _load_font(size=18):
+    candidates = [
+        "/System/Library/Fonts/SFNSMono.ttf",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size=size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
+
+
+def _draw_overlay(img, t, theta_deg, x_pos, label, kick_active):
+    """Composite timestamp + state + (optional) phase label onto a frame."""
+    img = img.convert("RGBA")
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    # Top strip: time + telemetry
+    font_small = _load_font(14)
+    info = f"t = {t:5.2f} s   theta = {theta_deg:+5.2f} deg   x = {x_pos:+5.3f} m"
+    draw.rectangle([(0, 0), (img.size[0], 24)], fill=(0, 0, 0, 140))
+    draw.text((8, 4), info, fill=(255, 255, 255, 255), font=font_small)
+
+    # Bottom centred banner
+    if label:
+        font_big = _load_font(22)
+        bbox = draw.textbbox((0, 0), label, font=font_big)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        x = (img.size[0] - tw) // 2
+        y = img.size[1] - th - 24
+        bg = (180, 40, 40, 200) if kick_active else (40, 40, 40, 180)
+        draw.rectangle(
+            [(x - 12, y - 8), (x + tw + 12, y + th + 8)],
+            fill=bg,
+        )
+        draw.text((x, y - bbox[1]), label, fill=(255, 255, 255, 255), font=font_big)
+
+    composed = Image.alpha_composite(img, overlay)
+    return composed.convert("RGB")
+
+
+def _current_phase(t):
+    """Return (label, kick_banner_active) for the given sim time.
+
+    Three phases per disturbance:
+      - kick window:   the force is being applied; banner shows the kick
+                       label in red.
+      - recovering:    1 s after the force ends; banner shows
+                       "LQR recovering" in calm grey.
+      - balanced:      anything else.
+    """
+    for start, _, dur, kick_label in DISTURBANCES:
+        if start <= t < start + dur:
+            return kick_label, True
+        if start + dur <= t < start + dur + 1.2:
+            return "LQR recovering", False
+    return "balanced", False
 
 
 def main():
-    model = mujoco.MjModel.from_xml_path(MODEL_PATH)
-    data = mujoco.MjData(model)
+    sim = SegwaySimulation(use_ros2=False)
+    sim.reset(pitch_deg=INITIAL_PITCH_DEG)
 
-    ext = SegwayStateExtractor(model)
+    renderer = mujoco.Renderer(sim.model, height=HEIGHT, width=WIDTH)
+    cam = _make_camera()
 
-    L_act = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "L_wheel_torque")
-    R_act = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "R_wheel_torque")
-
-    # 초기화: 크게 기울인 상태에서 시작
-    mujoco.mj_resetData(model, data)
-    pitch = np.deg2rad(20.0)
-    data.qpos[3] = np.cos(pitch / 2)
-    data.qpos[5] = np.sin(pitch / 2)
-    ext.reset()
-    mujoco.mj_forward(model, data)
-
-    # 오프스크린 렌더러
-    renderer = mujoco.Renderer(model, height=HEIGHT, width=WIDTH)
-
-    # 카메라: 측면에서 기울기가 잘 보이게
-    cam = mujoco.MjvCamera()
-    cam.type = mujoco.mjtCamera.mjCAMERA_FREE
-    cam.distance = 1.8
-    cam.azimuth = 100      # 약간 비스듬한 측면
-    cam.elevation = -15
-    cam.lookat[:] = [0.0, 0.0, 0.15]
-
+    fired = [False] * len(DISTURBANCES)
     frames = []
-    steps = int(DURATION / SIM_DT)
+    n_steps = int(DURATION_S / SIM_DT) + 1
 
-    # 외란 스케줄: (시간, 힘) — 주기적으로 밀어서 흔들리게
-    # 위치 복원용 K (phi 대신 x, phi_dot 대신 x_dot 사용)
-    K_pos = np.array([[-80.0, -25.0, -8.0, -15.0]])
+    print(f"Rendering {DURATION_S}s @ {FPS} fps "
+          f"(~{n_steps // RENDER_EVERY} frames @ {WIDTH}x{HEIGHT})")
 
-    print(f"렌더링 시작: {DURATION}초, {steps} 스텝, ~{steps // RENDER_EVERY} 프레임")
+    for i in range(n_steps):
+        t = sim.data.time
 
-    for i in range(steps):
-        theta = ext.get_theta(data)
-        theta_dot = ext.get_theta_dot(data)
-        x = float(data.qpos[0])
-        x_dot = float(data.qvel[0])
-        state_vec = np.array([theta, theta_dot, x, x_dot])
+        # Trigger any disturbance whose scheduled time has arrived.
+        for k, (start, force, duration, _) in enumerate(DISTURBANCES):
+            if not fired[k] and t >= start:
+                sim.apply_disturbance(force_N=force, duration_s=duration)
+                fired[k] = True
 
-        Tw = (K_pos @ state_vec).item()
-        tau = float(np.clip(Tw / 2, -TORQUE_LIMIT, TORQUE_LIMIT))
-        data.ctrl[L_act] = tau
-        data.ctrl[R_act] = tau
+        # Plain `sim.step()` — LQR is on, position regulation included.
+        sim.step()
 
-        mujoco.mj_step(model, data)
-
-        # 프레임 캡처
         if i % RENDER_EVERY == 0:
-            renderer.update_scene(data, camera=cam)
+            renderer.update_scene(sim.data, camera=cam)
             pixels = renderer.render()
-            frames.append(Image.fromarray(pixels))
+            frame = Image.fromarray(pixels)
 
-            if len(frames) % 25 == 0:
-                t = data.time
-                pitch_deg = np.degrees(ext.get_theta_display(data))
-                x_pos = float(data.qpos[0])
-                print(f"  t={t:.1f}s, pitch={pitch_deg:.2f}°, x={x_pos:.2f}m, 프레임 {len(frames)}")
+            theta_deg = float(np.degrees(sim.ext.get_theta(sim.data)))
+            x_pos = float(sim.data.qpos[0])
+            label, kick_active = _current_phase(t)
+            frames.append(_draw_overlay(frame, t, theta_deg, x_pos, label, kick_active))
 
-    print(f"\n총 {len(frames)} 프레임 캡처 완료. GIF 저장 중...")
+    sim.close()
 
-    # GIF 저장 (128색 팔레트로 용량 최적화)
-    quantized = [f.quantize(colors=128, method=Image.Quantize.MEDIANCUT) for f in frames]
+    print(f"Captured {len(frames)} frames. Quantizing + writing GIF...")
+    quantized = [
+        f.quantize(colors=32, method=Image.Quantize.MEDIANCUT) for f in frames
+    ]
+    out = os.path.abspath(OUTPUT_PATH)
     quantized[0].save(
-        OUTPUT_PATH,
+        out,
         save_all=True,
         append_images=quantized[1:],
-        duration=int(1000 / FPS),
+        duration=int(round(1000 / FPS)),
         loop=0,
         optimize=True,
     )
-    print(f"저장 완료: {OUTPUT_PATH}")
+    size_mb = os.path.getsize(out) / 1e6
+    print(f"Wrote {out} ({size_mb:.2f} MB)")
 
 
 if __name__ == "__main__":
