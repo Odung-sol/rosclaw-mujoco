@@ -23,9 +23,13 @@ mirroring how `mujoco_sim/` already runs MuJoCo natively.
 2. **Observation = local-LQR state:** `[θ, θ̇, φ, φ̇]` (same vector as
    `mujoco_sim/lqr_controller.py`'s `SegwayLQR`). Guarantees apples-to-apples
    comparison and lets the policy be swapped in behind the same interface.
-3. **Action:** continuous scalar in `Box(-1, 1)`, scaled to `±max_torque`
-   (20 N·m) to form total wheel torque `Tw`, split `tau_each = Tw/2` to both
-   wheels — identical to `SegwayLQR.compute_torque`.
+3. **Action:** continuous scalar in `Box(-1, 1)`, scaled to **per-wheel torque**
+   `tau_each = clip(action · max_torque, ±max_torque)` (±20 N·m) and applied
+   equally to both wheels. This matches the actuator `ctrlrange` and the
+   per-wheel authority `SegwayLQR` has after its own ±20 clip — full
+   control-authority parity. *(Corrected during Commit 1 implementation: the
+   original "scale to total `Tw` then split `/2`" wording would have capped RL
+   at ±10 per wheel — half of LQR's authority — making the comparison unfair.)*
 4. **Reward:** 4 terms — penalize `θ²`, `θ̇²`, `φ²`, and normalized control
    effort `τ²`, plus an alive bonus. (See §4.3.)
 5. **Commit count:** 4 commits (§8).
@@ -84,11 +88,14 @@ torque itself and advances physics.
   - `action_space = Box(-1.0, 1.0, shape=(1,))`.
   - `frame_skip=5` → control at ~100 Hz (5 × 0.002 s mj_steps per env step),
     matching the ROS2 LQR's documented ~100 Hz rate for a fair comparison.
-- **`reset(seed, options)`** → calls `sim.reset(pitch_deg=U(−reset_pitch_deg,
-  +reset_pitch_deg))` (randomized initial pitch for robustness), returns
-  `(obs, info)`.
+- **`reset(seed, options)`** → calls `sim.reset(pitch_deg=...)` and returns
+  `(obs, info)`. Pitch is sampled `U(−reset_pitch_deg, +reset_pitch_deg)` from
+  the env RNG, **unless** `options={"pitch_deg": x}` is given, which forces a
+  specific pitch — used by `evaluate.py` for deterministic, episode-matched
+  resets (§4.5) and by termination tests.
 - **`step(action)`**:
-  1. `Tw = float(action[0]) * max_torque`; `tau_each = Tw/2`.
+  1. `tau_each = clip(action[0] · max_torque, ±max_torque)` (per-wheel), applied
+     to both wheels.
   2. Repeat `frame_skip` times: `sim.set_torque_and_step(tau_each, tau_each)`.
   3. Read `obs = sim.ext.get_state(sim.data)`.
   4. `reward = compute_reward(obs, action)` — passes the **raw normalized
@@ -216,7 +223,8 @@ rl/                              # NEW — macOS-native (peer of mujoco_sim/)
 requirements-rl.txt             # NEW — gymnasium==, stable-baselines3==, torch==
 
 tests/
-├── test_segway_env.py          # NEW — env contract + reward (mujoco/gym importorskip)
+├── test_reward.py              # NEW — reward contract, pure NumPy (runs on CI)
+├── test_segway_env.py          # NEW — env contract + set_torque_and_step (mujoco/gym importorskip)
 └── test_rl_policy_adapter.py   # NEW — adapter == SegwayLQR interface (SB3 mocked)
 ```
 

@@ -1,0 +1,14 @@
+# RL (PPO) training / evaluation dependencies — macOS-native side ONLY.
+#
+# Installed into the local MuJoCo environment (the same one that runs
+# mujoco_sim/). Deliberately NOT added to requirements.txt / -dev.txt /
+# -ros2.txt: torch is large and the RL workflow is offline and local, so CI
+# and the ROS2 Docker image must stay free of it. See
+# docs/superpowers/specs/2026-06-22-rl-ppo-balancing-design.md §6.
+#
+# Pinned `==` like every other requirements file. Bump one at a time and
+# re-run `pytest tests/ -v` in the MuJoCo env.
+
+gymnasium==1.3.0
+stable-baselines3==2.9.0
+torch==2.12.1

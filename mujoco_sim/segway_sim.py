@@ -151,6 +151,20 @@ class SegwaySimulation:
             self.data.qfrc_applied,
         )
 
+    def set_torque_and_step(self, tau_L, tau_R):
+        """Apply wheel torques and advance one physics step.
+
+        The shared low-level stepping primitive: set both actuator ctrl
+        inputs, process any pending external disturbance (so disturbances act
+        uniformly across the LQR / RL / future controllers), then mj_step.
+        The RL env (rl/segway_env.py) builds on this; step() is refactored to
+        route through it in a later commit.
+        """
+        self.data.ctrl[self.L_act] = float(tau_L)
+        self.data.ctrl[self.R_act] = float(tau_R)
+        self._apply_pending_disturbance()
+        mujoco.mj_step(self.model, self.data)
+
     def step(self):
         """One simulation step using local LQR."""
         state = self.ext.get_state(self.data)
