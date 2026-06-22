@@ -164,3 +164,22 @@ class TestSegwayBalanceEnv:
         obs1, _ = env.reset(seed=1, options={"pitch_deg": 2.0})
         obs2, _ = env.reset(seed=2, options={"pitch_deg": 2.0})
         assert np.allclose(obs1, obs2, atol=1e-6)
+
+
+class TestPhiDotConvention:
+    """The phi_dot sign-convention check evaluate.py reports.
+
+    Guards the 2026-04-29 (L - R)/2 fix in state_extractor so the RL-vs-LQR
+    comparison can't be biased by a silently-zeroed position state.
+    """
+
+    def test_forward_motion_gives_nonzero_signed_phi_dot(self, sim):
+        from rl.evaluate import verify_phi_dot
+
+        ev = verify_phi_dot(sim)
+        # state_extractor reports the corrected (L - R)/2 value.
+        assert ev["phi_dot_from_state_extractor"] == pytest.approx(ev["phi_dot_corrected"])
+        # Forward motion => corrected phi_dot is clearly non-zero...
+        assert abs(ev["phi_dot_corrected"]) > 0.1
+        # ...while the old (L + R)/2 formula collapses toward zero (the bug).
+        assert abs(ev["phi_dot_old_buggy"]) < abs(ev["phi_dot_corrected"]) * 0.2

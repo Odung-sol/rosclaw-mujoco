@@ -43,3 +43,10 @@ docker/data/
 
 # MuJoCo compiled
 *.mjb
+
+# RL training artifacts (regenerate with `python -m rl.train`)
+rl/models/*.zip
+rl/models/*.pkl
+rl/models/*.png
+rl/models/*.csv
+!rl/models/.gitkeep

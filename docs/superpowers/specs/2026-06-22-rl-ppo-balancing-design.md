@@ -214,6 +214,7 @@ rl/                              # NEW — macOS-native (peer of mujoco_sim/)
 ├── README.md                   # train / eval / --rl usage + dep install note
 ├── segway_env.py               # SegwayBalanceEnv(gym.Env)
 ├── reward.py                   # compute_reward() — MuJoCo-free, unit-tested
+├── metrics.py                  # compute_episode_metrics() — MuJoCo-free, unit-tested
 ├── train.py                    # PPO training → rl/models/ppo_segway.zip
 ├── evaluate.py                 # rollout metrics, RL vs SegwayLQR + phi_dot check
 ├── policy_adapter.py           # RLPolicy.compute_torque() — SegwayLQR interface
@@ -224,7 +225,8 @@ requirements-rl.txt             # NEW — gymnasium==, stable-baselines3==, torc
 
 tests/
 ├── test_reward.py              # NEW — reward contract, pure NumPy (runs on CI)
-├── test_segway_env.py          # NEW — env contract + set_torque_and_step (mujoco/gym importorskip)
+├── test_metrics.py             # NEW — episode metrics, pure NumPy (runs on CI)
+├── test_segway_env.py          # NEW — env + set_torque_and_step + phi_dot (mujoco/gym importorskip)
 └── test_rl_policy_adapter.py   # NEW — adapter == SegwayLQR interface (SB3 mocked)
 ```
 
