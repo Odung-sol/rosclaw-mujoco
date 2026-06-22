@@ -183,3 +183,36 @@ class TestPhiDotConvention:
         assert abs(ev["phi_dot_corrected"]) > 0.1
         # ...while the old (L + R)/2 formula collapses toward zero (the bug).
         assert abs(ev["phi_dot_old_buggy"]) < abs(ev["phi_dot_corrected"]) * 0.2
+
+
+class TestControllerSeam:
+    """SegwaySimulation can run any controller with a compute_torque(state)
+    interface (LQR by default, RLPolicy via --rl)."""
+
+    def test_step_routes_through_injected_controller(self):
+        from segway_sim import SegwaySimulation
+
+        class _FakeController:
+            def compute_torque(self, state):
+                return 2.0, 2.0
+
+        with _cd(MUJOCO_DIR):
+            sim = SegwaySimulation(use_ros2=False, controller=_FakeController())
+            try:
+                sim.reset(pitch_deg=0.0)
+                sim.step()
+                assert sim.data.ctrl[sim.L_act] == pytest.approx(2.0)
+                assert sim.data.ctrl[sim.R_act] == pytest.approx(2.0)
+            finally:
+                sim.close()
+
+    def test_defaults_to_lqr_when_no_controller_given(self):
+        from segway_sim import SegwaySimulation
+        from lqr_controller import SegwayLQR
+
+        with _cd(MUJOCO_DIR):
+            sim = SegwaySimulation(use_ros2=False)
+            try:
+                assert isinstance(sim.controller, SegwayLQR)
+            finally:
+                sim.close()

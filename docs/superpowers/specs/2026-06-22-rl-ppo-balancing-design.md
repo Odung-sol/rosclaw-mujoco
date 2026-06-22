@@ -195,9 +195,11 @@ compute_reward(obs, action):
     obs from `state`, applies the saved normalization, `model.predict(obs,
     deterministic=True)`, scales action to torque, clips to `±torque_limit`,
     returns `(tau_each, tau_each)`.
-  - **Lazy import of SB3** inside `__init__` so the module imports without
-    torch/SB3 installed — this lets the interface-parity unit test run on CI
-    with a mocked predict (CI has no torch).
+  - **Dependency-injected model + `from_files()` classmethod:** the constructor
+    takes an already-loaded model (anything with `.predict`); `from_files()`
+    lazy-imports SB3 to load the `.zip` + `VecNormalize`. So the module imports
+    with only NumPy, and the adapter unit tests inject a fake model and run on
+    CI without torch.
 - **`segway_sim.py` controller seam:** in `__init__`, select
   `self.controller = SegwayLQR(...)` (default) or `RLPolicy(path)` when
   `--rl <path>` is passed. Refactor `step()` to call

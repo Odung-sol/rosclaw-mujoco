@@ -24,12 +24,15 @@ BODY_TOP_LOCAL = (0.0, 0.0, 0.34)
 
 
 class SegwaySimulation:
-    def __init__(self, use_ros2=False):
+    def __init__(self, use_ros2=False, controller=None):
         self.model = mujoco.MjModel.from_xml_path(MODEL_PATH)
         self.data  = mujoco.MjData(self.model)
 
         self.ext = SegwayStateExtractor(self.model)
         self.lqr = SegwayLQR(torque_limit=TORQUE_LIMIT)
+        # Active controller: anything exposing compute_torque(state)->(tL, tR).
+        # Defaults to the LQR; `--rl` injects an RLPolicy instead.
+        self.controller = controller if controller is not None else self.lqr
 
         self.L_act = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, "L_wheel_torque")
         self.R_act = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, "R_wheel_torque")
@@ -166,22 +169,16 @@ class SegwaySimulation:
         mujoco.mj_step(self.model, self.data)
 
     def step(self):
-        """One simulation step using local LQR."""
+        """One simulation step using the active controller (LQR or RL)."""
         state = self.ext.get_state(self.data)
 
         if abs(state[0]) > np.deg2rad(30):
             self.failed = True
-            self.data.ctrl[self.L_act] = 0.0
-            self.data.ctrl[self.R_act] = 0.0
-            mujoco.mj_step(self.model, self.data)
+            self.set_torque_and_step(0.0, 0.0)
             return state, 0.0, 0.0
 
-        tL, tR = self.lqr.compute_torque(state)
-        self.data.ctrl[self.L_act] = float(tL)
-        self.data.ctrl[self.R_act] = float(tR)
-
-        self._apply_pending_disturbance()
-        mujoco.mj_step(self.model, self.data)
+        tL, tR = self.controller.compute_torque(state)
+        self.set_torque_and_step(float(tL), float(tR))
         return state, tL, tR
 
     def step_ros2(self):
@@ -333,9 +330,28 @@ if __name__ == "__main__":
                    help="Use ROS2 LQR controller via rosbridge (requires docker compose up)")
     p.add_argument("--duration", type=float, default=10.0)
     p.add_argument("--pitch", type=float, default=2.0)
+    p.add_argument("--rl", action="store_true",
+                   help="Use a trained PPO policy (rl/models/) instead of the LQR")
+    p.add_argument("--rl-model", default=None,
+                   help="PPO .zip path (default: rl/models/ppo_segway.zip)")
+    p.add_argument("--rl-vecnorm", default=None,
+                   help="VecNormalize .pkl path (default: rl/models/vecnormalize.pkl)")
     args = p.parse_args()
 
-    sim = SegwaySimulation(use_ros2=args.ros2)
+    controller = None
+    if args.rl:
+        import sys
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parents[1]
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from rl.policy_adapter import RLPolicy
+        model = args.rl_model or str(repo_root / "rl" / "models" / "ppo_segway.zip")
+        vecnorm = args.rl_vecnorm or str(repo_root / "rl" / "models" / "vecnormalize.pkl")
+        controller = RLPolicy.from_files(model, vecnorm, torque_limit=TORQUE_LIMIT)
+        print(f"[RL] policy loaded: {model}")
+
+    sim = SegwaySimulation(use_ros2=args.ros2, controller=controller)
     try:
         if args.headless:
             sim.run_headless(args.duration, args.pitch)
