@@ -311,6 +311,22 @@ The README demo GIF runs three escalating kicks (30 N → 50 N → −80 N) with
 
 An alternative to the LQR: a PPO policy trained against the **same** MuJoCo physics and state pipeline, so it drops into the live sim and compares fairly. Runs entirely macOS-native (no Docker / ROS2). Full guide: [`rl/README.md`](rl/README.md).
 
+<p align="center">
+  <img src="docs/rl_training_curve.png" alt="PPO training curve: mean episode reward rises from 33 to about 834 over 300k timesteps" width="520">
+</p>
+<p align="center">
+  <em>Training curve — mean episode reward climbs 33 → ~834 (peak ~968) over 300k steps as the policy learns to balance.</em>
+</p>
+
+<p align="center">
+  <img src="docs/rl_vs_lqr.png" alt="RL vs LQR: peak tilt and settling time across initial pitches of 1, 2, and 3 degrees" width="720">
+</p>
+<p align="center">
+  <em>RL beats the LQR on small tilts (peak |θ| ~1–2° vs ~17–21°), but fails to generalize at the +3° edge — it tips over while the LQR still recovers. An honest trade-off.</em>
+</p>
+
+Figures regenerate with `python -m rl.plot_results` (reuses the training log + saved policy).
+
 ```bash
 pip install -r requirements-rl.txt                       # gymnasium, stable-baselines3, torch
 python -m rl.train --timesteps 300000                    # trains -> rl/models/ + training_curve.png
