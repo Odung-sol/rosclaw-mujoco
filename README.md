@@ -71,11 +71,12 @@ This project demonstrates an LLM acting as a **high-level planner** for a real-t
 
 - **LQR Balancing** — Optimal control based on a linearized inverted pendulum model (CARE solver with hard-coded MATLAB K fallback)
 - **Position Regulation** — The controller returns the segway to its starting position after a disturbance, not just upright
+- **RL (PPO) Controller** — A Stable-Baselines3 PPO policy balances the same model, trained against the same physics and state pipeline as the LQR for a fair head-to-head. Drop-in via `segway_sim.py --rl`; see [`rl/README.md`](rl/README.md)
 - **External Disturbance API** — `SegwaySimulation.apply_disturbance(force_N, duration_s)` injects an impulse at the body's top point; or push the same payload over the `/segway/disturbance` ROS2 topic. Acceptance bound: 1 N × 0.3 s recovers to within 0.5° / 0.1 m in 2 s
 - **Gemini NLP Node** — Natural language to JSON command conversion via `google-genai`, with rate limiting and schema validation. **Not in the control loop** — runs at intent-translation latency
 - **MuJoCo Physics** — Full rigid-body simulation with real STL meshes (linux/arm64 Docker, macOS-native MuJoCo viewer)
 - **ROSClaw + OpenClaw** — AI agent interface for natural language control (move, stop, tune gains, etc.)
-- **CI/CD Pipeline** — GitHub Actions: ruff lint + **62 unit tests** + TypeScript typecheck + Docker arm64 build (Buildx GHA-cached)
+- **CI/CD Pipeline** — GitHub Actions: ruff lint + **100 unit tests** (RL env/training tests skip on CI without gymnasium/torch) + TypeScript typecheck + Docker arm64 build (Buildx GHA-cached)
 - **WebSocket Bridge** — Stable macOS-to-Docker ROS2 communication, dual-connection (publish + subscribe) for race-free advertise / subscribe
 
 ## Project Structure
@@ -101,6 +102,16 @@ rosclaw-mujoco/
 │   ├── plot_client.py               # Real-time plotting
 │   └── meshes/                      # STL mesh files
 │
+├── rl/                              # RL (PPO) controller (macOS native)
+│   ├── segway_env.py                # Gymnasium env wrapping SegwaySimulation
+│   ├── reward.py                    # 4-term balancing reward (+ alive bonus)
+│   ├── metrics.py                   # per-episode comparison metrics
+│   ├── train.py                     # PPO training + training-curve plot
+│   ├── evaluate.py                  # RL vs LQR comparison + phi_dot check
+│   ├── policy_adapter.py            # run a trained policy behind the LQR interface
+│   ├── README.md                    # train / eval / --rl usage
+│   └── models/                      # trained artifacts (gitignored)
+│
 ├── ros2_ws/src/segway_controller/   # ROS2 nodes
 │   ├── lqr_controller_node.py       # LQR control node (CARE + MATLAB fallback)
 │   ├── gemini_nlp_node.py           # Gemini NLP parsing node
@@ -108,12 +119,16 @@ rosclaw-mujoco/
 │   ├── discovery_node.py            # ROSClaw auto-discovery
 │   └── params.yaml                  # Physical params + LQR weights
 │
-├── tests/                           # pytest suite (62 total)
+├── tests/                           # pytest suite (100 total; RL tests skip on CI)
 │   ├── conftest.py                  # ROS2/Gemini mock fixtures
 │   ├── test_gemini_nlp_node.py      # NLP node tests (21)
 │   ├── test_lqr_controller_node.py  # LQR node tests (17)
 │   ├── test_disturbance_recovery.py # Disturbance API + acceptance (6)
-│   └── test_bridge_disturbance.py   # Bridge JSON validation (18)
+│   ├── test_bridge_disturbance.py   # Bridge JSON validation (18)
+│   ├── test_reward.py               # RL reward, pure NumPy (9)
+│   ├── test_metrics.py              # RL episode metrics, pure NumPy (7)
+│   ├── test_segway_env.py           # RL env + controller seam + phi_dot (17)
+│   └── test_rl_policy_adapter.py    # RL policy adapter (5)
 │
 ├── extensions/openclaw-plugin/      # OpenClaw plugin (TypeScript)
 │   └── src/index.ts                 # 7 tools (move, stop, tune, etc.)
@@ -124,6 +139,7 @@ rosclaw-mujoco/
 ├── requirements.txt                 # macOS sim deps (pinned ==)
 ├── requirements-dev.txt             # pytest + ruff (pinned ==)
 ├── requirements-ros2.txt            # Docker runtime deps (pinned ==)
+├── requirements-rl.txt              # RL deps: gymnasium/SB3/torch (pinned ==)
 ├── .env.example                     # Canonical env-var list
 └── CLAUDE.md                        # Load-bearing invariants for AI agents
 ```
@@ -290,6 +306,19 @@ docker compose exec ros2_bridge bash -c \
 The bridge's listener validates the payload (rejects NaN / Inf / non-positive duration) and forwards it into `apply_disturbance()` on the simulator.
 
 The README demo GIF runs three escalating kicks (30 N → 50 N → −80 N) with the LQR active throughout — see `mujoco_sim/render_demo_gif.py` to reproduce.
+
+## Reinforcement Learning (PPO) Controller
+
+An alternative to the LQR: a PPO policy trained against the **same** MuJoCo physics and state pipeline, so it drops into the live sim and compares fairly. Runs entirely macOS-native (no Docker / ROS2). Full guide: [`rl/README.md`](rl/README.md).
+
+```bash
+pip install -r requirements-rl.txt                       # gymnasium, stable-baselines3, torch
+python -m rl.train --timesteps 300000                    # trains -> rl/models/ + training_curve.png
+python -m rl.evaluate --model rl/models/ppo_segway.zip   # RL vs LQR table + phi_dot check
+python mujoco_sim/segway_sim.py --rl                     # drive the sim with the trained policy
+```
+
+The env reuses `SegwaySimulation`, observes `[θ, θ̇, φ, φ̇]` (same as the local LQR) and emits a per-wheel torque, with a 4-term quadratic reward (the discrete-time analogue of the LQR cost) plus an alive bonus. Trained policies beat the LQR on small tilts (peak |θ| ~1–2° vs ~17–21°) but are less robust at the edge of the training distribution. RL dependencies stay out of CI and Docker (`requirements-rl.txt` only).
 
 ## Testing
 

@@ -48,7 +48,7 @@ jobs:
           pip install -r requirements-dev.txt -r requirements.txt
 
       - name: Lint with ruff
-        run: ruff check ros2_ws/ tests/ mujoco_sim/ --output-format=github
+        run: ruff check ros2_ws/ tests/ mujoco_sim/ rl/ --output-format=github
 
       - name: Run unit tests
         env:

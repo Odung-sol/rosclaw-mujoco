@@ -1,0 +1,2 @@
+# Keeps rl/models/ in git. Trained artifacts (*.zip, *.pkl, *.png, *.csv) are
+# gitignored — regenerate them with `python -m rl.train`.
