@@ -23,6 +23,7 @@ intent into structured commands on `/segway/cmd_reference`.
 | Path | What | Where it runs |
 |---|---|---|
 | `mujoco_sim/` | MuJoCo sim, state extractor, WebSocket bridge, standalone LQR | macOS native (MuJoCo) |
+| `rl/` | RL (PPO) balancing: Gymnasium env, reward, metrics, training, eval, policy adapter | macOS native (MuJoCo) |
 | `ros2_ws/src/segway_bridge/` | rosbridge wrapper node (relays topics) | Docker `ros2_bridge` |
 | `ros2_ws/src/segway_controller/` | `lqr_controller_node.py`, `gemini_nlp_node.py`, `discovery_node.py`, `params.yaml` | Docker `lqr_controller` / `gemini_nlp` / `rosclaw_discovery` |
 | `extensions/openclaw-plugin/` | OpenClaw TS plugin — wraps rosbridge as a tool for the AI host | Node.js (OpenClaw host) |
@@ -45,11 +46,17 @@ python mujoco_sim/segway_bridge.py
 # Full simulation (MuJoCo + ROS2)
 python mujoco_sim/segway_sim.py
 
+# RL (PPO) controller — macOS-native, see rl/README.md
+pip install -r requirements-rl.txt          # gymnasium, stable-baselines3, torch
+python -m rl.train --timesteps 300000        # -> rl/models/ + training_curve.png
+python -m rl.evaluate --model rl/models/ppo_segway.zip   # RL vs LQR + phi_dot check
+python mujoco_sim/segway_sim.py --rl          # run trained policy instead of the LQR
+
 # Run tests locally
 pytest tests/ -v
 
 # Lint
-ruff check ros2_ws/ tests/ mujoco_sim/
+ruff check ros2_ws/ tests/ mujoco_sim/ rl/
 ```
 
 Required env (see `.env.example`): `GOOGLE_API_KEY`. Optional:
@@ -107,6 +114,8 @@ Required env (see `.env.example`): `GOOGLE_API_KEY`. Optional:
 | Add a ROS2 node | new file under `ros2_ws/src/segway_controller/` + new service in `docker-compose.yml` + update §2 Repo map + update §4 if service count changes |
 | Add a new env var | `.env.example` + docstring in the reading code + `docker-compose.yml` `environment:` if needed + this file §3 |
 | Bump a Python dep | `requirements.txt` (or `-dev`/`-ros2` depending on where it runs) — pinned `==` always |
+| Tune the RL reward / retrain | `rl/reward.py` weights, then retrain (`python -m rl.train`) + re-eval (`python -m rl.evaluate`). Reward + metrics are MuJoCo-free and unit-tested (`test_reward.py`, `test_metrics.py`) |
+| Touch the RL env / policy | `rl/segway_env.py` (gym env wrapping `SegwaySimulation`) / `rl/policy_adapter.py` (`--rl` seam). RL deps go in `requirements-rl.txt` ONLY — never CI/Docker. Tests: `test_segway_env.py`, `test_rl_policy_adapter.py` |
 
 ## 6. Recently-decided (don't re-litigate)
 
@@ -136,11 +145,23 @@ Required env (see `.env.example`): `GOOGLE_API_KEY`. Optional:
   the application point. Bridge channel is `/segway/disturbance` with the
   same JSON-in-String wire format as the rest of the topics. Acceptance:
   1 N × 0.3 s → peak |θ| < 5°, recovers to <0.5° within 2 s. (2026-04-29)
+- **RL (PPO) balancing controller (`rl/`).** macOS-native alternative to the
+  LQR, trained with Stable-Baselines3 PPO against the same `segway.xml` and
+  `state_extractor` — so it's a fair LQR comparison and a drop-in via
+  `segway_sim.py --rl` (controller seam: `SegwaySimulation(controller=...)`).
+  Decisions: obs `[θ,θ̇,φ,φ̇]` and action→per-wheel torque (`±max_torque`)
+  match the local LQR; reward = 4-term quadratic (θ,θ̇,φ,τ) + alive bonus, the
+  discrete analogue of the LQR cost; deps (`gymnasium`/`stable-baselines3`/
+  `torch`) live in `requirements-rl.txt` ONLY — never CI/Docker (keeps both
+  torch-free); RL tests `importorskip` gymnasium/mujoco so CI runs only the
+  pure ones; trained artifacts in `rl/models/` are gitignored. Result: RL beats
+  LQR on small tilts but falls at the +3° training-edge (robustness deferred).
+  Spec: `docs/superpowers/specs/2026-06-22-rl-ppo-balancing-design.md`. (2026-06-22)
 
 ## 7. Verification before merging
 
 ```bash
-ruff check ros2_ws/ tests/ mujoco_sim/
+ruff check ros2_ws/ tests/ mujoco_sim/ rl/
 pytest tests/ -v
 # Docker build smoke:
 docker compose build
@@ -163,3 +184,6 @@ via `npx tsc --noEmit` in the `typescript` matrix job.
 - `.env.example` — canonical env-var list
 - `ros2_ws/src/segway_controller/params.yaml` — LQR weights + physics
 - `pyproject.toml` — ruff + pytest config
+- `rl/README.md` — RL (PPO) controller: train / evaluate / `--rl` usage
+- `requirements-rl.txt` — RL deps (`gymnasium`/`stable-baselines3`/`torch`),
+  macOS-native only, never installed in CI or Docker
