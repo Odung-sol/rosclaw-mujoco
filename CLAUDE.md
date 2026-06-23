@@ -23,7 +23,7 @@ intent into structured commands on `/segway/cmd_reference`.
 | Path | What | Where it runs |
 |---|---|---|
 | `mujoco_sim/` | MuJoCo sim, state extractor, WebSocket bridge, standalone LQR | macOS native (MuJoCo) |
-| `rl/` | RL (PPO) balancing: Gymnasium env, reward, metrics, training, eval, policy adapter | macOS native (MuJoCo) |
+| `rl/` | RL (PPO) balancing: Gymnasium env, reward, metrics, training, eval, policy adapter, CARE-tuning, result figures | macOS native (MuJoCo) |
 | `ros2_ws/src/segway_bridge/` | rosbridge wrapper node (relays topics) | Docker `ros2_bridge` |
 | `ros2_ws/src/segway_controller/` | `lqr_controller_node.py`, `gemini_nlp_node.py`, `discovery_node.py`, `params.yaml` | Docker `lqr_controller` / `gemini_nlp` / `rosclaw_discovery` |
 | `extensions/openclaw-plugin/` | OpenClaw TS plugin — wraps rosbridge as a tool for the AI host | Node.js (OpenClaw host) |
@@ -154,9 +154,14 @@ Required env (see `.env.example`): `GOOGLE_API_KEY`. Optional:
   discrete analogue of the LQR cost; deps (`gymnasium`/`stable-baselines3`/
   `torch`) live in `requirements-rl.txt` ONLY — never CI/Docker (keeps both
   torch-free); RL tests `importorskip` gymnasium/mujoco so CI runs only the
-  pure ones; trained artifacts in `rl/models/` are gitignored. Result: RL beats
-  LQR on small tilts but falls at the +3° training-edge (robustness deferred).
-  Spec: `docs/superpowers/specs/2026-06-22-rl-ppo-balancing-design.md`. (2026-06-22)
+  pure ones; trained artifacts in `rl/models/` are gitignored. Result (fair
+  comparison, `rl/lqr_tuning.py` CARE baseline using the ROS2 node's Q/R): RL
+  matches a properly-tuned LQR in-distribution (±1–2°) but the tuned LQR is more
+  robust (RL falls at +3°, the LQR doesn't) and rejects the 1 N impulse better
+  — the big gap vs the *fixed* MATLAB gains was a tuning artifact (those target
+  impulse-from-upright, not step tilts). Result figures: `rl/plot_results.py` /
+  `rl/render_gif.py` → `docs/rl_*.{png,gif}`. Spec:
+  `docs/superpowers/specs/2026-06-22-rl-ppo-balancing-design.md`. (2026-06-22)
 
 ## 7. Verification before merging
 

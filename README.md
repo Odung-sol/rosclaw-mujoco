@@ -312,10 +312,10 @@ The README demo GIF runs three escalating kicks (30 N → 50 N → −80 N) with
 An alternative to the LQR: a PPO policy trained against the **same** MuJoCo physics and state pipeline, so it drops into the live sim and compares fairly. Runs entirely macOS-native (no Docker / ROS2). Full guide: [`rl/README.md`](rl/README.md).
 
 <p align="center">
-  <img src="docs/rl_vs_lqr.gif" alt="Side-by-side MuJoCo render: the RL policy and the LQR each balancing the Segway from a 2-degree tilt" width="600">
+  <img src="docs/rl_vs_lqr.gif" alt="Three-panel MuJoCo render from a +2 degree tilt: RL policy, fixed-gain LQR, and CARE-tuned LQR" width="760">
 </p>
 <p align="center">
-  <em>Released from a +2° tilt (offscreen MuJoCo render): the RL policy (left) stays nearly upright while the LQR (right) lurches past 20° before recovering.</em>
+  <em>Released from a +2° tilt (offscreen MuJoCo render): the <b>fixed-gain</b> LQR (middle, tuned for impulses) lurches past 20°, while the RL policy (left) and a properly-tuned <b>CARE</b> LQR (right) both stay upright — the overshoot is a tuning artifact, not an RL-vs-LQR gap.</em>
 </p>
 
 <p align="center">
@@ -326,10 +326,10 @@ An alternative to the LQR: a PPO policy trained against the **same** MuJoCo phys
 </p>
 
 <p align="center">
-  <img src="docs/rl_vs_lqr.png" alt="RL vs LQR: peak tilt and settling time across initial pitches of 1, 2, and 3 degrees" width="720">
+  <img src="docs/rl_vs_lqr.png" alt="Peak tilt for RL vs fixed-gain LQR vs CARE-tuned LQR, on step tilts and a 1N impulse" width="760">
 </p>
 <p align="center">
-  <em>RL beats the LQR on small tilts (peak |θ| ~1–2° vs ~17–21°), but fails to generalize at the +3° edge — it tips over while the LQR still recovers. An honest trade-off.</em>
+  <em>Peak tilt (lower is better). A <b>CARE-tuned LQR matches RL</b> at +1–2° and stays stable at +3° where <b>RL tips over</b>; on the 1N impulse the LQR is best. The fixed gains overshoot everywhere — they target impulses, not initial tilts. Honest read: comparable in-distribution, with the tuned LQR more robust — not "RL beats LQR".</em>
 </p>
 
 Figures regenerate with `python -m rl.plot_results` and the GIF with `python -m rl.render_gif` (both reuse the training log + saved policy — no retrain).
@@ -341,7 +341,9 @@ python -m rl.evaluate --model rl/models/ppo_segway.zip   # RL vs LQR table + phi
 python mujoco_sim/segway_sim.py --rl                     # drive the sim with the trained policy
 ```
 
-The env reuses `SegwaySimulation`, observes `[θ, θ̇, φ, φ̇]` (same as the local LQR) and emits a per-wheel torque, with a 4-term quadratic reward (the discrete-time analogue of the LQR cost) plus an alive bonus. Trained policies beat the LQR on small tilts (peak |θ| ~1–2° vs ~17–21°) but are less robust at the edge of the training distribution. RL dependencies stay out of CI and Docker (`requirements-rl.txt` only).
+The env reuses `SegwaySimulation`, observes `[θ, θ̇, φ, φ̇]` (same as the local LQR) and emits a per-wheel torque, with a 4-term quadratic reward (the discrete-time analogue of the LQR cost) plus an alive bonus.
+
+**On a fair comparison, RL does not beat a properly-tuned LQR.** A CARE-tuned LQR (`rl/lqr_tuning.py`, using the ROS2 node's own `Q`/`R`) matches the RL policy in its training range (±1–2°), stays stable at +3° where **RL tips over**, and rejects the 1 N impulse better. The dramatic gap you'll see against the *fixed-gain* `SegwayLQR` is a tuning artifact — those MATLAB gains were tuned for impulse-from-upright, not step initial tilts, so they overshoot badly off-design. RL's genuine strength here is that it learned a low-overshoot in-distribution balancer from reward alone; its weakness is brittleness at the distribution edge. RL dependencies stay out of CI and Docker (`requirements-rl.txt` only).
 
 ## Testing
 
