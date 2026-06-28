@@ -46,6 +46,20 @@ the corrected `(L − R)/2` getter is in use so the comparison isn't biased).
 | `metrics.py` | per-episode summary metrics (pure, CI-tested) |
 | `train.py` | PPO training + training-curve plot |
 | `evaluate.py` | RL-vs-LQR comparison + phi_dot verification |
-| `policy_adapter.py` | *(Commit 3)* run the trained policy in the live sim via `--rl` |
+| `policy_adapter.py` | run the trained policy in the live sim via `--rl` |
+| `lqr_tuning.py` | CARE-tuned LQR gain (fair baseline; physics read from the model) |
+| `benchmark.py` | objective metrics + region-of-attraction sweeps (`python -m rl.benchmark`) |
+| `plot_results.py` / `render_gif.py` | result figures + the comparison GIF |
+
+## Objective comparison
+
+`python -m rl.benchmark` scores each controller (RL / fixed LQR / CARE-tuned LQR)
+by the metrics the self-balancing-robot literature reports: settling time,
+peak/overshoot, control-effort RMS, position drift, and the two robustness
+limits — **max recoverable tilt** (region of attraction) and **max recoverable
+impulse**. Takeaway: a CARE-tuned LQR is the stronger controller on nearly every
+metric; RL has by far the smallest region of attraction (recovers from only a 2°
+tilt / 10 N push vs the LQR's ≥30° / ≥160 N). See the README's RL section for the
+table and figures.
 
 See `docs/superpowers/specs/2026-06-22-rl-ppo-balancing-design.md` for the design.
