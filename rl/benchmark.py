@@ -108,6 +108,27 @@ def roa_force_N(controller):
     return max_recoverable(FORCE_SWEEP_N, survived)
 
 
+def disturbance_response(controller, force_N, dur_s=0.3, rec_s=4.0):
+    """theta(t) after a force_N x dur_s push from upright (the paper-standard
+    disturbance step-response). Returns (times_s, thetas_deg, failed)."""
+    from segway_sim import SegwaySimulation, SIM_DT
+
+    sim = SegwaySimulation(use_ros2=False, controller=controller)
+    sim.reset(pitch_deg=0.0)
+    for _ in range(500):
+        sim.step()
+    sim.apply_disturbance(force_N=force_N, duration_s=dur_s)
+    t0 = sim.data.time
+    times, thetas = [], []
+    for _ in range(int(rec_s / SIM_DT)):
+        s, _, _ = sim.step()
+        times.append(sim.data.time - t0)
+        thetas.append(np.degrees(s[0]))
+    failed = sim.failed
+    sim.close()
+    return np.array(times), np.array(thetas), failed
+
+
 def make_controllers():
     """[(name, controller)] for RL, fixed-gain LQR, CARE-tuned LQR."""
     from segway_sim import SegwaySimulation

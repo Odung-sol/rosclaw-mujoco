@@ -349,6 +349,13 @@ An alternative to the LQR: a PPO policy trained against the **same** MuJoCo phys
 
 By these standard criteria the **CARE-tuned LQR is the stronger controller** — ~7× faster settling, ~5× less torque, and a far larger region of attraction. RL's only edge is tighter position-holding. "Looks stable in the GIF" is necessary but not sufficient; these are the numbers the field compares ([review](https://www.mdpi.com/2218-6581/14/8/101), [LQR/PID metrics](https://www.researchgate.net/publication/374164891_Performance_comparison_between_LQR_and_PID_controllers_for_two-wheeled_self-balancing_vehicle), [region-of-attraction](https://arxiv.org/pdf/2604.04455)).
 
+<p align="center">
+  <img src="docs/rl_disturbance_response.png" alt="Disturbance step-response: tilt versus time after a 10N and a 20N push, for RL, fixed LQR, and CARE-tuned LQR" width="840">
+</p>
+<p align="center">
+  <em>The artifact control papers actually use — tilt θ(t) after a defined push (not a video). <b>Left (10 N, all recover):</b> the CARE LQR is critically damped (snaps back instantly), RL has a small peak but a slow tail (3.7 s), the fixed LQR rings (under-damped). <b>Right (20 N):</b> RL holds briefly then <b>falls</b>, while both LQRs recover. This answers "how much force → recovered in how many seconds", which a stable-looking GIF cannot.</em>
+</p>
+
 Figures regenerate with `python -m rl.plot_results` and the GIF with `python -m rl.render_gif`; the metrics table with `python -m rl.benchmark` (all reuse the training log + saved policy — no retrain).
 
 ```bash

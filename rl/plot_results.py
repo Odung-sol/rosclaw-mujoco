@@ -31,7 +31,9 @@ for _p in (str(_REPO_ROOT), str(_REPO_ROOT / "mujoco_sim")):
 from segway_sim import SegwaySimulation  # noqa: E402
 from rl.policy_adapter import RLPolicy  # noqa: E402
 from rl.lqr_tuning import make_care_lqr  # noqa: E402
-from rl.benchmark import make_controllers, roa_tilt_deg, roa_force_N  # noqa: E402
+from rl.benchmark import (  # noqa: E402
+    make_controllers, roa_tilt_deg, roa_force_N, disturbance_response,
+)
 
 DOCS = _REPO_ROOT / "docs"
 MODELS = _REPO_ROOT / "rl" / "models"
@@ -191,11 +193,52 @@ def plot_robustness():
     print(f"[robust] {out}")
 
 
+def plot_disturbance_response():
+    # The paper-standard artifact: theta(t) recovery after a defined push.
+    os.chdir(_REPO_ROOT / "mujoco_sim")
+    ctrls = make_controllers()
+    colors = ["#185FA5", "#D85A30", "#1D9E75"]
+    panels = [(10.0, "all recover", None), (20.0, "RL falls", (-33, 12))]
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
+    for ax, (force, tag, ylim) in zip(axes, panels):
+        ax.axvspan(0, 0.3, color="gray", alpha=0.15)
+        for (name, c), col in zip(ctrls, colors):
+            t, th, failed = disturbance_response(c, force)
+            if failed:
+                # truncate at the fail cone so the 180° wrap doesn't draw a spike
+                bad = np.where(np.abs(th) >= 30.0)[0]
+                if len(bad):
+                    t, th = t[: bad[0] + 1], th[: bad[0] + 1]
+                lbl = f"{name}: FELL"
+            else:
+                out = np.where(np.abs(th) >= 0.5)[0]
+                settle = t[out[-1]] if len(out) else 0.0
+                lbl = f"{name}: peak {float(np.max(np.abs(th))):.1f}°, settle {settle:.1f}s"
+            ax.plot(t, th, color=col, lw=1.8, label=lbl)
+        if ylim is not None:
+            ax.axhline(-30, ls="--", color=FAIL_COLOR, lw=1)
+            ax.text(0.05, -30.6, "fall (±30°)", color=FAIL_COLOR, fontsize=8, va="top")
+            ax.set_ylim(*ylim)
+        ax.axhline(0, color="k", lw=0.5)
+        ax.set_xlabel("time after push (s)")
+        ax.set_ylabel("tilt θ (deg)")
+        ax.set_title(f"{force:.0f} N × 0.3 s push — {tag}")
+        ax.legend(loc="upper right", fontsize=8)
+        ax.grid(True, alpha=0.3)
+    fig.suptitle("Disturbance step-response — how each controller recovers from a push", fontsize=12)
+    fig.tight_layout()
+    out = DOCS / "rl_disturbance_response.png"
+    fig.savefig(out, dpi=120)
+    plt.close(fig)
+    print(f"[response] {out}")
+
+
 def main():
     DOCS.mkdir(exist_ok=True)
     plot_training_curve()
     plot_comparison()
     plot_robustness()
+    plot_disturbance_response()
 
 
 if __name__ == "__main__":
