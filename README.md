@@ -332,7 +332,24 @@ An alternative to the LQR: a PPO policy trained against the **same** MuJoCo phys
   <em>Peak tilt (lower is better). A <b>CARE-tuned LQR matches RL</b> at +1–2° and stays stable at +3° where <b>RL tips over</b>; on the 1N impulse the LQR is best. The fixed gains overshoot everywhere — they target impulses, not initial tilts. Honest read: comparable in-distribution, with the tuned LQR more robust — not "RL beats LQR".</em>
 </p>
 
-Figures regenerate with `python -m rl.plot_results` and the GIF with `python -m rl.render_gif` (both reuse the training log + saved policy — no retrain).
+<p align="center">
+  <img src="docs/rl_robustness.png" alt="Region of attraction and disturbance rejection for RL vs fixed LQR vs CARE-tuned LQR" width="760">
+</p>
+<p align="center">
+  <em>Region of attraction — the largest disturbance each controller still recovers from. <b>RL has by far the smallest</b> (only a 2° tilt / 10 N push); the CARE-tuned LQR recovers from ≥30° / ≥160 N. "Maximum recoverable tilt" is a standard yardstick in the balancing-robot literature.</em>
+</p>
+
+**Objective metrics** (a +2° step, by what the self-balancing-robot literature reports — settling time, peak/overshoot, control effort, position drift, region of attraction, disturbance rejection). Reproduce with `python -m rl.benchmark`:
+
+| controller | peak \|θ\| | settling | torque RMS | position drift | max tilt (RoA) | max impulse |
+|---|---|---|---|---|---|---|
+| RL (PPO) | 2.0° | 3.35 s | 0.92 | **0.04 m** | 2° | 10 N |
+| LQR (fixed) | 23.1° | 7.10 s | 4.60 | 0.75 m | 5° | 40 N |
+| **LQR (CARE-tuned)** | **2.0°** | **0.45 s** | **0.19** | 0.43 m | **≥30°** | **≥160 N** |
+
+By these standard criteria the **CARE-tuned LQR is the stronger controller** — ~7× faster settling, ~5× less torque, and a far larger region of attraction. RL's only edge is tighter position-holding. "Looks stable in the GIF" is necessary but not sufficient; these are the numbers the field compares ([review](https://www.mdpi.com/2218-6581/14/8/101), [LQR/PID metrics](https://www.researchgate.net/publication/374164891_Performance_comparison_between_LQR_and_PID_controllers_for_two-wheeled_self-balancing_vehicle), [region-of-attraction](https://arxiv.org/pdf/2604.04455)).
+
+Figures regenerate with `python -m rl.plot_results` and the GIF with `python -m rl.render_gif`; the metrics table with `python -m rl.benchmark` (all reuse the training log + saved policy — no retrain).
 
 ```bash
 pip install -r requirements-rl.txt                       # gymnasium, stable-baselines3, torch

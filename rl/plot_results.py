@@ -31,6 +31,7 @@ for _p in (str(_REPO_ROOT), str(_REPO_ROOT / "mujoco_sim")):
 from segway_sim import SegwaySimulation  # noqa: E402
 from rl.policy_adapter import RLPolicy  # noqa: E402
 from rl.lqr_tuning import make_care_lqr  # noqa: E402
+from rl.benchmark import make_controllers, roa_tilt_deg, roa_force_N  # noqa: E402
 
 DOCS = _REPO_ROOT / "docs"
 MODELS = _REPO_ROOT / "rl" / "models"
@@ -149,10 +150,52 @@ def plot_comparison():
     print(f"[compare] {out}")
 
 
+def plot_robustness():
+    # Region-of-attraction sweeps (the field-standard robustness measure).
+    os.chdir(_REPO_ROOT / "mujoco_sim")
+    ctrls = make_controllers()
+    labels = ["RL\n(PPO)", "LQR\n(fixed)", "LQR\n(CARE-tuned)"]
+    colors = ["#185FA5", "#D85A30", "#1D9E75"]
+    tilt = [roa_tilt_deg(c) for _, c in ctrls]
+    force = [roa_force_N(c) for _, c in ctrls]
+    print(f"[roa] max tilt={[round(v) for v in tilt]}°  max force={[round(v) for v in force]}N")
+
+    x = np.arange(len(ctrls))
+    fig, (at, af) = plt.subplots(1, 2, figsize=(9, 4))
+    at.bar(x, tilt, 0.6, color=colors)
+    for i, v in enumerate(tilt):
+        cap = "≥30° (sim cone)" if v >= 30 else f"{v:.0f}°"
+        at.text(i, v + 0.4, cap, ha="center", fontsize=9)
+    at.set_xticks(x)
+    at.set_xticklabels(labels)
+    at.set_ylabel("max recoverable tilt (deg)")
+    at.set_title("Region of attraction (higher = more robust)")
+    at.grid(True, axis="y", alpha=0.3)
+
+    af.bar(x, force, 0.6, color=colors)
+    for i, v in enumerate(force):
+        cap = "≥160 N (test max)" if v >= 160 else f"{v:.0f} N"
+        af.text(i, v + 2, cap, ha="center", fontsize=9)
+    af.set_xticks(x)
+    af.set_xticklabels(labels)
+    af.set_ylabel("max recoverable impulse (N · 0.3s)")
+    af.set_title("Disturbance rejection (higher = more robust)")
+    af.grid(True, axis="y", alpha=0.3)
+
+    fig.suptitle("RL has by far the smallest region of attraction; the CARE-tuned LQR the largest",
+                 fontsize=11)
+    fig.tight_layout()
+    out = DOCS / "rl_robustness.png"
+    fig.savefig(out, dpi=120)
+    plt.close(fig)
+    print(f"[robust] {out}")
+
+
 def main():
     DOCS.mkdir(exist_ok=True)
     plot_training_curve()
     plot_comparison()
+    plot_robustness()
 
 
 if __name__ == "__main__":

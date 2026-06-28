@@ -159,8 +159,10 @@ Required env (see `.env.example`): `GOOGLE_API_KEY`. Optional:
   matches a properly-tuned LQR in-distribution (±1–2°) but the tuned LQR is more
   robust (RL falls at +3°, the LQR doesn't) and rejects the 1 N impulse better
   — the big gap vs the *fixed* MATLAB gains was a tuning artifact (those target
-  impulse-from-upright, not step tilts). Result figures: `rl/plot_results.py` /
-  `rl/render_gif.py` → `docs/rl_*.{png,gif}`. Spec:
+  impulse-from-upright, not step tilts). Objective battery `rl/benchmark.py`
+  (settling/overshoot/effort/drift + region-of-attraction sweeps) quantifies it:
+  RL's RoA is just 2°/10 N vs the CARE LQR's ≥30°/≥160 N. Result figures:
+  `rl/plot_results.py` / `rl/render_gif.py` → `docs/rl_*.{png,gif}`. Spec:
   `docs/superpowers/specs/2026-06-22-rl-ppo-balancing-design.md`. (2026-06-22)
 
 ## 7. Verification before merging
